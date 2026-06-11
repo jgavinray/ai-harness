@@ -1,0 +1,11 @@
+[server]
+port = 8484
+
+[backend]
+kind = "llamacpp"
+base_url = "http://192.168.0.196:8000/v1"
+model = "gemma-4-31b-q4-llamacpp"
+
+[profile]
+name = "gemma"
+context_window = 131072
