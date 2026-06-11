@@ -26,6 +26,39 @@ repairs the model's output so Claude Code always receives a spec-valid response.
 | Degenerate detection | Periodic-output detection aborts runaway streams cleanly |
 | Reasoning handling | `<think>`/reasoning_content mapped to Anthropic thinking blocks (or stripped) |
 
+## Fleet mode
+
+Multiple inference servers become one API. Each `[[backends]]` entry has a model
+profile and roles; the router gives every Claude Code conversation **session
+affinity** (its growing prompt prefix stays hot in one server's KV cache),
+sends haiku-class background calls to a `fast` backend, and fans sub-agent
+traffic out to `subagent` backends with circuit-breaker failover.
+
+Three cache layers:
+
+| Layer | Mechanism | Saves |
+|---|---|---|
+| KV/prefix cache | session affinity + llama.cpp `cache_prompt` / vLLM `--enable-prefix-caching` | prompt recompute (TTFT) |
+| Response cache | exact-match on rendered payload, fast-role requests | whole inference calls |
+| Knowledge cache | `[memory]` per-project lessons injected next session | re-exploration tokens |
+
+Cached prefix tokens are reported to Claude Code as `cache_read_input_tokens`,
+so its native usage display works. Real per-backend numbers: `GET /dashboard`.
+
+## Measured, not vibes
+
+`evals/` runs real `claude -p` sessions over scripted tasks and produces an
+A/B report (baseline vs full pipeline vs per-stage ablations):
+
+```bash
+.venv/bin/python evals/run.py --backend-url http://host:8000/v1 \
+    --model <id> --profile qwen --kind vllm --configs baseline,full --trials 3
+.venv/bin/python evals/report.py
+```
+
+Every request also feeds `[traces]` capture; `scripts/corpus.py` joins traces
+with eval outcomes into an SFT-ready corpus for distilling smaller models.
+
 ## Quickstart
 
 ```bash
