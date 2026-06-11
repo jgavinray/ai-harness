@@ -24,6 +24,23 @@ def error_body(error_type: str, message: str) -> dict:
     return {"type": "error", "error": {"type": error_type, "message": message}}
 
 
+def _usage(done: Done | None) -> dict:
+    """Anthropic usage semantics: input_tokens = uncached prompt tokens."""
+    if done is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
+    return {
+        "input_tokens": max(done.input_tokens - done.cached_tokens, 0),
+        "output_tokens": done.output_tokens,
+        "cache_read_input_tokens": done.cached_tokens,
+        "cache_creation_input_tokens": 0,
+    }
+
+
 class _BlockState:
     """Tracks the currently open content block and assigns indexes."""
 
@@ -73,7 +90,7 @@ async def stream_sse(
 
     st = _BlockState()
     stop_reason = "end_turn"
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = _usage(None)
 
     async for ev in events:
         if isinstance(ev, ThinkingDelta):
@@ -101,7 +118,7 @@ async def stream_sse(
             yield st.close()
         elif isinstance(ev, Done):
             stop_reason = ev.stop_reason
-            usage = {"input_tokens": ev.input_tokens, "output_tokens": ev.output_tokens}
+            usage = _usage(ev)
 
     if st.open_kind:
         yield st.close()
@@ -110,7 +127,7 @@ async def stream_sse(
         {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {"output_tokens": usage["output_tokens"]},
+            "usage": usage,
         },
     )
     yield _ev("message_stop", {"type": "message_stop"})
@@ -120,7 +137,7 @@ def collect(events: list[IREvent], model: str, msg_id: str) -> dict:
     """Accumulate IR events into a non-streaming Anthropic message."""
     content: list[dict] = []
     stop_reason = "end_turn"
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = _usage(None)
 
     def _append_text(kind: str, key: str, text: str) -> None:
         if content and content[-1]["type"] == kind:
@@ -142,7 +159,7 @@ def collect(events: list[IREvent], model: str, msg_id: str) -> dict:
             )
         elif isinstance(ev, Done):
             stop_reason = ev.stop_reason
-            usage = {"input_tokens": ev.input_tokens, "output_tokens": ev.output_tokens}
+            usage = _usage(ev)
 
     return {
         "id": msg_id,

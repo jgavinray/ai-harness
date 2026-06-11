@@ -48,6 +48,10 @@ class VllmBackend(OpenAIBackend):
 class LlamaCppBackend(OpenAIBackend):
     constrained = True
 
+    def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
+        payload.setdefault("cache_prompt", True)  # llama.cpp KV prefix reuse
+        return super().stream(payload)
+
     def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
         payload["json_schema"] = schema
         return payload

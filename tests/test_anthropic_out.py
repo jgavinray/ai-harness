@@ -58,7 +58,12 @@ async def test_collect_non_streaming():
     assert kinds == ["thinking", "text", "tool_use"]
     assert msg["content"][1]["text"] == "Hello"
     assert msg["content"][2]["input"] == {"file_path": "/x"}
-    assert msg["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert msg["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
 
 def test_error_sse():
