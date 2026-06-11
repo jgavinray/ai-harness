@@ -21,6 +21,15 @@ class ProfileCfg(BaseModel):
     context_window: int = 32768
 
 
+class PoolBackendCfg(BackendCfg):
+    """One entry of the [[backends]] fleet array."""
+
+    name: str
+    profile: str = "qwen"
+    context_window: int = 32768
+    roles: list[str] = ["main", "subagent", "fast"]
+
+
 class PipelineCfg(BaseModel):
     system_prompt: str = "replace"  # replace | compress | passthrough
     tool_prune: bool = True
@@ -43,6 +52,7 @@ class LogCfg(BaseModel):
 class Settings(BaseModel):
     server: ServerCfg = ServerCfg()
     backend: BackendCfg = BackendCfg()
+    backends: list[PoolBackendCfg] = []  # fleet mode; empty = single-backend mode
     profile: ProfileCfg = ProfileCfg()
     pipeline: PipelineCfg = PipelineCfg()
     debug: DebugCfg = DebugCfg()
