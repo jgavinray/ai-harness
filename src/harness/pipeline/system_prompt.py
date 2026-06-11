@@ -14,7 +14,8 @@ from dataclasses import replace
 from harness.config import Settings
 from harness.ir import Conversation
 
-FINGERPRINT = "You are Claude Code"
+# Interactive CLI and SDK/print-mode ship different first lines.
+FINGERPRINTS = ("You are Claude Code", "built on Anthropic's Claude Agent SDK")
 
 # Sections whose content is user/project context and must survive verbatim.
 KEEP = re.compile(r"environment|claude\.?md|memory|project|context|directory structure|git status", re.I)
@@ -75,6 +76,6 @@ class SystemPromptStage:
         mode = settings.pipeline.system_prompt
         if mode == "passthrough" or not conv.system:
             return conv
-        if mode == "replace" and FINGERPRINT in conv.system:
+        if mode == "replace" and any(f in conv.system for f in FINGERPRINTS):
             return replace(conv, system=_rebuild(conv.system))
         return replace(conv, system=_compress(conv.system))

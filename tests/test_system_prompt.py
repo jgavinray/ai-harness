@@ -51,3 +51,15 @@ def test_compress_squeezes_whitespace():
     out = SystemPromptStage().apply(conv_with(messy), settings("compress"))
     assert "\n\n\n" not in out.system
     assert "line1" in out.system and "line2" in out.system
+
+
+def test_sdk_print_mode_prompt_also_replaced():
+    sdk_system = (
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n\n"
+        "# Tone and style\n" + ("Be concise. " * 300) + "\n\n"
+        "# Environment\nWorking directory: /repo\n"
+    )
+    out = SystemPromptStage().apply(conv_with(sdk_system), settings("replace"))
+    assert "old_string" in out.system
+    assert "Working directory: /repo" in out.system
+    assert len(out.system) < len(sdk_system)
