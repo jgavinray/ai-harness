@@ -76,3 +76,12 @@ async def test_stats_per_backend_shape():
     assert b["requests"] == 1
     assert "ttft_p50_ms" in b and "kv_cache_hit_pct" in b
     assert b["roles"] == ["main", "subagent", "fast"]
+
+
+async def test_dashboard_served():
+    fake = FakeOpenAI()
+    async with make_client(fake) as client:
+        resp = await client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "ai-harness" in resp.text

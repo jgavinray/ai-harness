@@ -15,7 +15,9 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+
+DASHBOARD = Path(__file__).parent / "static" / "dashboard.html"
 
 from harness import relay
 from harness.backends.base import BackendError
@@ -204,6 +206,10 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
         except Exception as exc:
             return invalid_request(f"could not decode request: {exc!r}")
         return JSONResponse({"input_tokens": count_conversation(conv, counter)})
+
+    @app.get("/dashboard")
+    async def dashboard():
+        return HTMLResponse(DASHBOARD.read_text())
 
     @app.get("/stats")
     async def get_stats():

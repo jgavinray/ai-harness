@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ai-harness dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d1117; color: #c9d1d9; margin: 2rem; }
+  h1 { font-size: 1.2rem; color: #58a6ff; }
+  .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+          padding: 0.8rem 1.2rem; min-width: 9rem; }
+  .card .v { font-size: 1.5rem; color: #f0f6fc; }
+  .card .k { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 0.45rem 0.9rem; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-size: 0.75rem; text-transform: uppercase; }
+  .down { color: #f85149; } .up { color: #3fb950; }
+  #err { color: #f85149; }
+</style>
+</head>
+<body>
+<h1>ai-harness <span id="err"></span></h1>
+<div class="cards" id="cards"></div>
+<table>
+  <thead><tr>
+    <th>backend</th><th>model</th><th>roles</th><th>state</th><th>req</th>
+    <th>err</th><th>in-flight</th><th>ttft p50</th><th>ttft p95</th><th>kv cache</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+const fmt = n => (n ?? 0).toLocaleString();
+async function tick() {
+  try {
+    const s = await (await fetch("/stats")).json();
+    document.getElementById("err").textContent = "";
+    const cacheTotal = s.response_cache.hits + s.response_cache.misses;
+    const cards = [
+      ["requests", fmt(s.requests)],
+      ["errors", fmt(s.errors)],
+      ["input tok", fmt(s.input_tokens)],
+      ["output tok", fmt(s.output_tokens)],
+      ["kv cached tok", fmt(s.cached_tokens)],
+      ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–"],
+    ];
+    document.getElementById("cards").innerHTML = cards
+      .map(([k, v]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div></div>`)
+      .join("");
+    document.getElementById("rows").innerHTML = Object.entries(s.backends)
+      .map(([name, b]) => `<tr>
+        <td>${name}</td><td>${b.model}</td><td>${b.roles.join(", ")}</td>
+        <td class="${b.down ? "down" : "up"}">${b.down ? "DOWN" : "up"}</td>
+        <td>${fmt(b.requests)}</td><td>${fmt(b.errors)}</td><td>${b.in_flight}</td>
+        <td>${fmt(b.ttft_p50_ms)} ms</td><td>${fmt(b.ttft_p95_ms)} ms</td>
+        <td>${b.kv_cache_hit_pct}%</td>
+      </tr>`).join("");
+  } catch (e) {
+    document.getElementById("err").textContent = "— stats unreachable";
+  }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
