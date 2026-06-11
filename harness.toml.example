@@ -1,0 +1,28 @@
+# ai-harness configuration. Copy to harness.toml and edit.
+
+[server]
+host = "127.0.0.1"
+port = 8484
+
+[backend]
+kind = "openai"            # openai | vllm | llamacpp
+base_url = "http://localhost:11434/v1"
+model = "qwen2.5-coder:32b"
+api_key = "local"
+
+[profile]
+name = "qwen"              # qwen | deepseek_r1 | devstral | gemma
+context_window = 32768
+
+[pipeline]
+system_prompt = "replace"  # replace | compress | passthrough
+tool_prune = true
+max_tools = 8
+fewshot = true
+repair_retries = 2
+recent_turns_protected = 4
+reasoning = "thinking"     # thinking | strip
+
+[debug]
+dump_prompts = false
+dump_dir = "debug_dumps"
