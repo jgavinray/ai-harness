@@ -32,8 +32,9 @@ from harness.pipeline.history import HistoryStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
-from harness.router import Router
+from harness.router import Router, session_key
 from harness.tokens.counter import HeuristicCounter, count_conversation
+from harness.traces import TraceStore
 
 STAGES = [
     SystemPromptStage(),
@@ -74,6 +75,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
     rcache = ResponseCache(settings.cache.ttl_s, settings.cache.max_entries)
     counter = HeuristicCounter()
     logger = RequestLogger(settings.log.requests_path)
+    traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
              "cached_tokens": 0}
 
@@ -97,6 +99,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
         conv = run_pipeline(conv, settings, STAGES)
 
         chosen = router.pick(body)
+        skey = session_key(body)
         role = "fast" if "haiku" in (body.get("model") or "") else "main"
         rendered = chosen.profile.render(conv, chosen.model_name)
         _dump(settings, "rendered-payload", rendered)
@@ -107,6 +110,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
         metrics: dict = {}
         record: dict = {
             "request_id": msg_id,
+            "session_key": skey,
             "model": model,
             "backend": chosen.name,
             "role": role,
@@ -147,7 +151,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
                     stats["cached_tokens"] += ev.cached_tokens
                     chosen.prompt_tokens += ev.input_tokens
                     chosen.cached_tokens += ev.cached_tokens
-                if cache_key and cached_events is None:
+                if (cache_key and cached_events is None) or settings.traces.enabled:
                     buffer.append(ev)
                 yield ev
 
@@ -164,6 +168,8 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
                 and isinstance(buffer[-1], Done)
             ):
                 rcache.put(cache_key, buffer)
+            if settings.traces.enabled and cached_events is None:
+                traces.append(skey, msg_id, rendered, buffer, dict(metrics))
             logger.write(record)
 
         if conv.params.stream:

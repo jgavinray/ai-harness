@@ -20,6 +20,7 @@ def render(
     port: int,
     log_path: str,
     overrides: dict[str, bool],
+    traces_dir: str | None = None,
 ) -> str:
     lines = [
         "[server]",
@@ -38,6 +39,8 @@ def render(
     for stage, (on, off) in STAGES.items():
         lines.append(on if overrides.get(stage, True) else off)
     lines += ["", "[log]", f'requests_path = "{log_path}"']
+    if traces_dir:
+        lines += ["", "[traces]", "enabled = true", f'dir = "{traces_dir}"']
     return "\n".join(lines) + "\n"
 
 

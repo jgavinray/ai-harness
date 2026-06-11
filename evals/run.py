@@ -68,7 +68,7 @@ def aggregate_log(log_path: Path) -> dict:
 
 
 def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
-              claude_bin: str, timeout_s: int) -> dict:
+              claude_bin: str, timeout_s: int, tag: str = "") -> dict:
     workdir = Path(shutil.copytree(task_dir / "repo_template",
                                    Path(os.environ.get("TMPDIR", "/tmp")) /
                                    f"eval-{task_dir.name}-{time.time_ns()}"))
@@ -80,6 +80,7 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
     server = subprocess.Popen(
         [PYTHON, "-m", "harness", "--config", str(cfg_path)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=ROOT,
+        env=dict(os.environ, HARNESS_TRACE_TAG=tag),
     )
     try:
         if not wait_for(f"http://127.0.0.1:{port}/stats"):
@@ -156,14 +157,16 @@ def main() -> None:
             out_dir / "configs", [config_name],
             backend_url=args.backend_url, model=args.model, profile=args.profile,
             kind=args.kind, port=port, log_path=str(log_path),
+            traces_dir=str(out_dir / "traces"),
         )
         for task_name in args.tasks.split(","):
             for trial in range(args.trials):
                 log_path.unlink(missing_ok=True)
+                tag = f"{args.model}-{config_name}-{task_name}-{trial}"
                 row = run_trial(TASKS_DIR / task_name, cfg_paths[config_name],
-                                port, log_path, args.claude_bin, args.timeout)
+                                port, log_path, args.claude_bin, args.timeout, tag)
                 row.update({"task": task_name, "config": config_name, "trial": trial,
-                            "model": args.model})
+                            "model": args.model, "tag": tag})
                 with results_path.open("a") as f:
                     f.write(json.dumps(row) + "\n")
                 status = "PASS" if row.get("success") else "FAIL"

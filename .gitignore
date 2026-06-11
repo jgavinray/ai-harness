@@ -6,3 +6,5 @@ debug_dumps/
 logs/
 evals/results/
 evals/generated/
+traces/
+corpus.jsonl
