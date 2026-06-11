@@ -44,8 +44,18 @@ def _append_feedback(conv: Conversation, bad: ToolCall, error: str) -> Conversat
 
 
 async def run(
-    conv: Conversation, profile: Profile, backend: Backend, settings: Settings
+    conv: Conversation,
+    profile: Profile,
+    backend: Backend,
+    settings: Settings,
+    metrics: dict | None = None,
 ) -> AsyncIterator[IREvent]:
+    m = metrics if metrics is not None else {}
+    m.setdefault("retries", 0)
+    m.setdefault("repaired_calls", 0)
+    m.setdefault("valid_calls", 0)
+    m.setdefault("invalid_calls", 0)
+    m.setdefault("degenerate_aborts", 0)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
@@ -65,6 +75,7 @@ async def run(
                 if suppress_text:
                     continue
                 if isinstance(ev, TextDelta) and detector.feed(ev.text):
+                    m["degenerate_aborts"] += 1
                     yield TextDelta("\n[output truncated: repetition detected]")
                     yield Done("end_turn")
                     return
@@ -75,11 +86,15 @@ async def run(
                 fixed, error = repair_toolcall(ev, conv.tools)
                 if fixed is not None:
                     emitted_valid_call = True
+                    m["valid_calls"] += 1
+                    if ev.raw_arguments:  # arrived malformed, json-repaired locally
+                        m["repaired_calls"] += 1
                     yield fixed
                 elif attempts < settings.pipeline.repair_retries:
                     bad_call, bad_error = ev, error or "invalid"
                     break
                 else:
+                    m["invalid_calls"] += 1
                     raw = ev.raw_arguments or str(ev.arguments)
                     yield TextDelta(f"\n[invalid tool call {ev.name}: {bad_error or error}]\n{raw[:500]}")
             else:  # Done
@@ -96,6 +111,7 @@ async def run(
             return
 
         attempts += 1
+        m["retries"] += 1
         suppress_text = True
         tool = next((t for t in conv.tools if t.name == bad_call.name), None)
         constraint_schema = tool.original_schema if tool else None

@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from harness import relay
 from harness.backends.base import BackendError
+from harness.ir import Done
+from harness.log import RequestLogger
 from harness.backends.openai_compat import make_backend
 from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
@@ -54,6 +56,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
     backend = make_backend(settings.backend, client)
     profile = get_profile(settings.profile.name)
     counter = HeuristicCounter()
+    logger = RequestLogger(settings.log.requests_path)
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0}
 
     def invalid_request(message: str) -> JSONResponse:
@@ -79,32 +82,61 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
         stats["requests"] += 1
         msg_id = "msg_" + uuid.uuid4().hex[:24]
         model = body.get("model", settings.backend.model)
-        events = relay.run(conv, profile, backend, settings)
+        metrics: dict = {}
+        record: dict = {
+            "request_id": msg_id,
+            "model": model,
+            "stream": conv.params.stream,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "stop_reason": None,
+            "ttft_ms": None,
+        }
+        start = time.monotonic()
+        events = relay.run(conv, profile, backend, settings, metrics=metrics)
+
+        async def _instrument(evs):
+            async for ev in evs:
+                if record["ttft_ms"] is None:
+                    record["ttft_ms"] = int((time.monotonic() - start) * 1000)
+                if isinstance(ev, Done):
+                    record["input_tokens"] = ev.input_tokens
+                    record["output_tokens"] = ev.output_tokens
+                    record["stop_reason"] = ev.stop_reason
+                    stats["input_tokens"] += ev.input_tokens
+                    stats["output_tokens"] += ev.output_tokens
+                yield ev
+
+        def _finish_record() -> None:
+            record["wall_ms"] = int((time.monotonic() - start) * 1000)
+            if record["ttft_ms"] is None:
+                record["ttft_ms"] = record["wall_ms"]
+            record.update(metrics)
+            logger.write(record)
 
         if conv.params.stream:
             async def sse():
                 try:
-                    async for piece in stream_sse(_track(events), model, msg_id):
+                    async for piece in stream_sse(_instrument(events), model, msg_id):
                         yield piece
                 except BackendError as exc:
                     stats["errors"] += 1
+                    record["error"] = str(exc)
                     yield error_sse("overloaded_error", str(exc))
+                finally:
+                    _finish_record()
 
             return StreamingResponse(sse(), media_type="text/event-stream")
 
         try:
-            collected = [e async for e in _track(events)]
+            collected = [e async for e in _instrument(events)]
         except BackendError as exc:
             stats["errors"] += 1
+            record["error"] = str(exc)
+            _finish_record()
             return JSONResponse(error_body("overloaded_error", str(exc)), status_code=529)
+        _finish_record()
         return JSONResponse(collect(collected, model, msg_id))
-
-    async def _track(events):
-        async for ev in events:
-            if hasattr(ev, "input_tokens"):
-                stats["input_tokens"] += ev.input_tokens
-                stats["output_tokens"] += ev.output_tokens
-            yield ev
 
     @app.post("/v1/messages/count_tokens")
     async def count_tokens(request: Request):
