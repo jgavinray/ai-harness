@@ -1,0 +1,154 @@
+import json
+
+import httpx
+
+from harness.config import Settings
+from harness.server import create_app
+from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk, tool_chunk
+
+READ_TOOL = {
+    "name": "Read",
+    "description": "Reads a file",
+    "input_schema": {
+        "type": "object",
+        "properties": {"file_path": {"type": "string"}},
+        "required": ["file_path"],
+    },
+}
+
+
+def request_body(stream: bool = True, system=None, tools=None) -> dict:
+    return {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 512,
+        "stream": stream,
+        "system": system or "be brief",
+        "messages": [{"role": "user", "content": "read /x"}],
+        "tools": tools if tools is not None else [READ_TOOL],
+    }
+
+
+def make_client(fake: FakeOpenAI) -> httpx.AsyncClient:
+    settings = Settings()
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    settings.backend.base_url = "http://fake/v1"
+    app = create_app(settings, backend_client=backend_client)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+
+def sse_events(raw: str):
+    out = []
+    for chunk in raw.strip().split("\n\n"):
+        lines = chunk.split("\n")
+        out.append((lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))))
+    return out
+
+
+async def test_streaming_round_trip():
+    fake = FakeOpenAI()
+    fake.push([
+        text_chunk("on it"),
+        tool_chunk("c1", "Read", '{"file_path": "/x"}'),
+        finish_chunk("tool_calls"),
+    ])
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json=request_body())
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    evs = sse_events(resp.text)
+    names = [n for n, _ in evs]
+    assert names[0] == "message_start" and names[-1] == "message_stop"
+    tool_start = next(
+        d for n, d in evs
+        if n == "content_block_start" and d["content_block"]["type"] == "tool_use"
+    )
+    assert tool_start["content_block"]["name"] == "Read"
+    md = next(d for n, d in evs if n == "message_delta")
+    assert md["delta"]["stop_reason"] == "tool_use"
+
+
+async def test_non_streaming():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+    body = resp.json()
+    assert body["type"] == "message"
+    assert body["content"][0] == {"type": "text", "text": "done"}
+    assert body["stop_reason"] == "end_turn"
+
+
+async def test_count_tokens_no_backend_call():
+    fake = FakeOpenAI()
+    async with make_client(fake) as client:
+        resp = await client.post(
+            "/v1/messages/count_tokens",
+            json={"model": "m", "messages": [{"role": "user", "content": "hello world"}]},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["input_tokens"] > 0
+    assert fake.requests == []
+
+
+async def test_backend_down_maps_to_overloaded():
+    settings = Settings()
+    settings.backend.base_url = "http://localhost:1/v1"  # nothing listens
+    app = create_app(settings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://proxy"
+    ) as client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+    assert resp.status_code == 529
+    assert resp.json()["error"]["type"] == "overloaded_error"
+
+
+async def test_backend_500_streaming_emits_error_event():
+    fake = FakeOpenAI()
+    fake.push([{"_status": 500}])
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json=request_body())
+    assert resp.status_code == 200  # stream already started; error travels in-band
+    evs = sse_events(resp.text)
+    assert evs[-1][0] == "error"
+    assert evs[-1][1]["error"]["type"] == "overloaded_error"
+
+
+async def test_malformed_request_400():
+    fake = FakeOpenAI()
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json={"model": "m"})  # no messages/max_tokens
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+
+
+async def test_stats():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("hi"), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        await client.post("/v1/messages", json=request_body(stream=False))
+        resp = await client.get("/stats")
+    assert resp.json()["requests"] == 1
+
+
+async def test_pipeline_applied_end_to_end():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    cc_system = (
+        "You are Claude Code, Anthropic's official CLI for Claude.\n\n"
+        "# Tone and style\n" + ("Be concise. " * 500) + "\n\n"
+        "# Environment\nWorking directory: /repo\n"
+    )
+    many_tools = [READ_TOOL] + [
+        {**READ_TOOL, "name": f"Extra{i}", "description": "x"} for i in range(14)
+    ]
+    async with make_client(fake) as client:
+        await client.post(
+            "/v1/messages", json=request_body(stream=False, system=cc_system, tools=many_tools)
+        )
+    sent = fake.requests[0]
+    assert sent["messages"][0]["role"] == "system"
+    assert len(sent["messages"][0]["content"]) < 5000
+    assert "Working directory: /repo" in sent["messages"][0]["content"]
+    assert len(sent["tools"]) <= 8

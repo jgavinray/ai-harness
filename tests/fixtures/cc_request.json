@@ -1,0 +1,101 @@
+{
+  "model": "claude-sonnet-4-6",
+  "max_tokens": 8192,
+  "stream": true,
+  "temperature": 1.0,
+  "stop_sequences": [],
+  "metadata": {"user_id": "user_abc123"},
+  "system": [
+    {
+      "type": "text",
+      "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+      "cache_control": {"type": "ephemeral"}
+    },
+    {
+      "type": "text",
+      "text": "You are an interactive CLI tool that helps users with software engineering tasks.\n\n# Tone and style\nYou should be concise, direct, and to the point.\n\n# Tool usage policy\nWhen doing file search, prefer to use the Grep tool.\n\n# Environment\nWorking directory: /home/user/project\nPlatform: linux",
+      "cache_control": {"type": "ephemeral"}
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "fix the failing test in tests/test_utils.py"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "I'll look at the failing test first."},
+        {
+          "type": "tool_use",
+          "id": "toolu_01A",
+          "name": "Read",
+          "input": {"file_path": "/home/user/project/tests/test_utils.py"}
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01A",
+          "content": [
+            {"type": "text", "text": "def test_add():\n    assert add(1, 2) == 4\n"}
+          ]
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01B",
+          "name": "Bash",
+          "input": {"command": "pytest tests/test_utils.py -x", "description": "Run the failing test"}
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01B",
+          "content": "1 failed: assert 3 == 4",
+          "is_error": true
+        },
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"}}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "Read",
+      "description": "Reads a file from the local filesystem.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {"type": "string", "description": "The absolute path to the file to read"},
+          "limit": {"type": "number"},
+          "offset": {"type": "number"}
+        },
+        "required": ["file_path"]
+      }
+    },
+    {
+      "name": "Bash",
+      "description": "Executes a bash command.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {"type": "string"},
+          "description": {"type": "string"},
+          "timeout": {"type": "number"}
+        },
+        "required": ["command"]
+      }
+    }
+  ]
+}
