@@ -8,6 +8,7 @@ role responses are served from the exact-match response cache when possible.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -28,6 +29,7 @@ from harness.codec.anthropic_out import collect, error_body, error_sse, stream_s
 from harness.config import Settings
 from harness.ir import Done
 from harness.log import RequestLogger
+from harness.memory import MemoryManager, MemoryStage
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -78,6 +80,23 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
     counter = HeuristicCounter()
     logger = RequestLogger(settings.log.requests_path)
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
+
+    async def fast_complete(messages: list[dict]) -> str:
+        candidates = pool.with_role("fast") or pool.backends
+        b = min(candidates, key=lambda x: x.in_flight)
+        payload = {
+            "model": b.model_name, "messages": messages, "max_tokens": 400,
+            "stream": True, "stream_options": {"include_usage": True},
+        }
+        from harness.ir import TextDelta
+        text = ""
+        async for ev in b.profile.parse(b.stream(payload)):
+            if isinstance(ev, TextDelta):
+                text += ev.text
+        return text
+
+    memory = MemoryManager(settings, fast_complete if settings.memory.enabled else None)
+    stages = STAGES + [MemoryStage(memory, settings)]
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
              "cached_tokens": 0}
 
@@ -98,7 +117,7 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
             return invalid_request(f"could not decode request: {exc!r}")
 
         _dump(settings, "anthropic-request", body)
-        conv = run_pipeline(conv, settings, STAGES)
+        conv = run_pipeline(conv, settings, stages)
 
         chosen = router.pick(body)
         skey = session_key(body)
@@ -172,6 +191,12 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
                 rcache.put(cache_key, buffer)
             if settings.traces.enabled and cached_events is None:
                 traces.append(skey, msg_id, rendered, buffer, dict(metrics))
+            if settings.memory.enabled and role == "main":
+                memory.note(skey, conv.system, rendered.get("messages", []))
+                try:
+                    asyncio.get_running_loop().create_task(memory.sweep())
+                except RuntimeError:
+                    pass
             logger.write(record)
 
         if conv.params.stream:

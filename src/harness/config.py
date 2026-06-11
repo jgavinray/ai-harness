@@ -54,6 +54,13 @@ class TracesCfg(BaseModel):
     dir: str = "traces"
 
 
+class MemoryCfg(BaseModel):
+    enabled: bool = False
+    dir: str = "~/.ai-harness/memory"
+    idle_s: float = 300.0  # session considered finished after this much quiet
+    max_chars: int = 4000  # ~1k tokens of injected memory
+
+
 class CacheCfg(BaseModel):
     enabled: bool = True
     ttl_s: float = 600.0
@@ -71,6 +78,7 @@ class Settings(BaseModel):
     log: LogCfg = LogCfg()
     cache: CacheCfg = CacheCfg()
     traces: TracesCfg = TracesCfg()
+    memory: MemoryCfg = MemoryCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
