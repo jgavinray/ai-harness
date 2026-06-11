@@ -3,3 +3,6 @@ __pycache__/
 *.egg-info/
 debug_dumps/
 .pytest_cache/
+logs/
+evals/results/
+evals/generated/

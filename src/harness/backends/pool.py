@@ -37,6 +37,30 @@ class PooledBackend:
         self.prompt_tokens = 0
         self.ttft_ms: list[int] = []
 
+    @property
+    def model_name(self) -> str:
+        return self.cfg.model
+
+    @property
+    def constrained(self) -> bool:
+        return self.backend.constrained
+
+    def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
+        return self.backend.apply_constraint(payload, schema)
+
+    async def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
+        self.in_flight += 1
+        self.requests += 1
+        try:
+            async for chunk in self.backend.stream(payload):
+                yield chunk
+            self.mark_ok()
+        except BackendError:
+            self.trip()
+            raise
+        finally:
+            self.in_flight -= 1
+
     def is_down(self) -> bool:
         return time.time() < self.cooldown_until
 
@@ -81,14 +105,5 @@ class BackendPool:
         ]
 
     async def stream(self, b: PooledBackend, payload: dict[str, Any]) -> AsyncIterator[dict]:
-        b.in_flight += 1
-        b.requests += 1
-        try:
-            async for chunk in b.backend.stream(payload):
-                yield chunk
-            b.mark_ok()
-        except BackendError:
-            b.trip()
-            raise
-        finally:
-            b.in_flight -= 1
+        async for chunk in b.stream(payload):
+            yield chunk

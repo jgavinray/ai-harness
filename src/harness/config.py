@@ -49,6 +49,13 @@ class LogCfg(BaseModel):
     requests_path: str | None = None  # JSONL per-request log; None = disabled
 
 
+class CacheCfg(BaseModel):
+    enabled: bool = True
+    ttl_s: float = 600.0
+    max_entries: int = 256
+    roles: list[str] = ["fast"]  # which routed roles are response-cacheable
+
+
 class Settings(BaseModel):
     server: ServerCfg = ServerCfg()
     backend: BackendCfg = BackendCfg()
@@ -57,6 +64,7 @@ class Settings(BaseModel):
     pipeline: PipelineCfg = PipelineCfg()
     debug: DebugCfg = DebugCfg()
     log: LogCfg = LogCfg()
+    cache: CacheCfg = CacheCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

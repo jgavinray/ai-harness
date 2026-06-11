@@ -60,8 +60,9 @@ async def run(
     suppress_text = False
     constraint_schema: dict | None = None
 
+    model_name = getattr(backend, "model_name", settings.backend.model)
     while True:
-        payload = profile.render(conv, settings.backend.model)
+        payload = profile.render(conv, model_name)
         if attempts and backend.constrained and constraint_schema is not None:
             payload = backend.apply_constraint(payload, constraint_schema)
 

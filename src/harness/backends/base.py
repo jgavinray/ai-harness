@@ -18,6 +18,10 @@ class Backend:
         self.cfg = cfg
         self.client = client
 
+    @property
+    def model_name(self) -> str:
+        return self.cfg.model
+
     async def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
         raise NotImplementedError
         yield  # pragma: no cover

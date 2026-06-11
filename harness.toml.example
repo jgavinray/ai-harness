@@ -26,3 +26,20 @@ reasoning = "thinking"     # thinking | strip
 [debug]
 dump_prompts = false
 dump_dir = "debug_dumps"
+
+# ---- fleet mode (preferred): one [[backends]] block per server ----
+# [[backends]]
+# name = "big"
+# kind = "vllm"              # openai | vllm | llamacpp
+# base_url = "http://host:8000/v1"
+# model = "model-id"
+# profile = "qwen"           # qwen | deepseek_r1 | devstral | gemma
+# context_window = 131072
+# roles = ["main"]           # main | subagent | fast
+#
+# [cache]
+# enabled = true             # response cache for fast-role requests
+# ttl_s = 600
+#
+# [log]
+# requests_path = "logs/requests.jsonl"
