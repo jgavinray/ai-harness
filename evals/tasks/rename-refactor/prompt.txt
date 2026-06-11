@@ -1,0 +1,1 @@
+Rename the function calc_total to compute_total everywhere in this project (definition and all call sites). Verify afterward with `python3 report.py` and confirm no references to the old name remain.
