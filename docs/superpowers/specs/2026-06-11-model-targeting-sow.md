@@ -78,7 +78,42 @@ The harness is the data engine, not just the runtime. `dump_prompts` already cap
 
 **Phase D4 (stretch) — Fine-tune the mimic.** LoRA SFT of the best Tier 2 model on the filtered Phase D1 corpus (successful sessions only). Because the corpus is rendered through the harness, the fine-tuned model trains on the *exact* prompt distribution it will see in production — this is the strongest version of "use the harness to build a similar system on a lower-tier model." Re-run Phase D3 acceptance afterward.
 
-## 5. Deliverables & sequencing
+## 5. Technique inventory: industry practice vs. paper-ware (at 14b–30b)
+
+What reliably moves the needle for small coding agents in practice, versus what mostly survives only in benchmarks. Every "in plan" item still gets ablation-validated before becoming default.
+
+**Proven levers (deploy, then measure):**
+- Constrained/structured decoding for tool args — biggest single reliability win at this scale. *(wired: vLLM guided_json, llama.cpp json_schema)*
+- Few-shot in the model's exact wire format — works; generic examples work far less. *(wired)*
+- Aggressive context discipline — small models degrade well before their advertised window ("context rot" starts ~8–16k effective); keeping working context small beats clever retrieval. *(wired: compaction; tighten per tier)*
+- KV/prefix-cache discipline + session affinity — the real-world latency/throughput lever every provider runs on. *(Phase C)*
+- Trajectory SFT on your own validated traces — the strongest documented small-model lift in industry agent stacks; this is the Phase D corpus path.
+- Model cascade / escalation routing — serve cheap, escalate on failure signal (wedge, retry exhaustion). Industry standard for cost; maps to 27B→35B escalation on this fleet.
+
+**Conditional (works in a band, gate on evals):**
+- Plan-then-execute scaffolds — helps multi-step tasks, adds tokens/latency to simple ones; mandatory below ~8b, optional above.
+- Self-critique / adversarial critic (Reflexion-style) — tends to help ≥30b, *hurts* below: the critic hallucinates defects. Cross-model critique (different family as critic) is the variant worth testing on a multi-backend fleet.
+- Single-tool-per-turn forcing — clear win <14b, unnecessary constraint above.
+- Episodic memory (retrieve own successful trajectories as worked examples) — strong in principle, needs a real corpus first (Phase D dependency).
+
+**Mostly paper-ware at this scale (skip until evidence appears):**
+- Self-consistency voting for agentic coding — token cost rarely pays off outside math/QA.
+- Process reward models / tree search over actions — infrastructure cost wildly out of proportion at local-fleet scale.
+- Hindsight relabeling of failed trajectories — research-stage; revisit if the SFT corpus plateaus.
+
+## 6. Authoring standard: plans must be executable by a 14b model
+
+All future specs and implementation plans in this repo are written so a 14b-class agent (running through this harness) can execute them without inferring intent:
+
+1. Every step names its exact file path and contains the **complete** code or command — never "similar to above", never "add appropriate handling".
+2. One action per step; each step ends with a verification command and its expected output.
+3. Decision points are written as explicit if/then rules, not judgment calls.
+4. Each task is independently verifiable and ends with a commit; failure = stop, report, do not improvise.
+5. No step depends on context outside the plan document plus the named files.
+
+This makes the plan corpus itself part of the downscale experiment: Phase D2 can replay plan execution against Tier 2 models.
+
+## 7. Deliverables & sequencing
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
