@@ -1,0 +1,1 @@
+Add a /health endpoint to app.py that returns status 200 with body "ok", following the existing route pattern. Verify by running `python3 test_app.py`.

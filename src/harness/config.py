@@ -21,6 +21,15 @@ class ProfileCfg(BaseModel):
     context_window: int = 32768
 
 
+class PoolBackendCfg(BackendCfg):
+    """One entry of the [[backends]] fleet array."""
+
+    name: str
+    profile: str = "qwen"
+    context_window: int = 32768
+    roles: list[str] = ["main", "subagent", "fast"]
+
+
 class PipelineCfg(BaseModel):
     system_prompt: str = "replace"  # replace | compress | passthrough
     tool_prune: bool = True
@@ -36,12 +45,40 @@ class DebugCfg(BaseModel):
     dump_dir: str = "debug_dumps"
 
 
+class LogCfg(BaseModel):
+    requests_path: str | None = None  # JSONL per-request log; None = disabled
+
+
+class TracesCfg(BaseModel):
+    enabled: bool = False
+    dir: str = "traces"
+
+
+class MemoryCfg(BaseModel):
+    enabled: bool = False
+    dir: str = "~/.ai-harness/memory"
+    idle_s: float = 300.0  # session considered finished after this much quiet
+    max_chars: int = 4000  # ~1k tokens of injected memory
+
+
+class CacheCfg(BaseModel):
+    enabled: bool = True
+    ttl_s: float = 600.0
+    max_entries: int = 256
+    roles: list[str] = ["fast"]  # which routed roles are response-cacheable
+
+
 class Settings(BaseModel):
     server: ServerCfg = ServerCfg()
     backend: BackendCfg = BackendCfg()
+    backends: list[PoolBackendCfg] = []  # fleet mode; empty = single-backend mode
     profile: ProfileCfg = ProfileCfg()
     pipeline: PipelineCfg = PipelineCfg()
     debug: DebugCfg = DebugCfg()
+    log: LogCfg = LogCfg()
+    cache: CacheCfg = CacheCfg()
+    traces: TracesCfg = TracesCfg()
+    memory: MemoryCfg = MemoryCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

@@ -2,10 +2,13 @@
 
 Every response path — success, backend failure, bad request — produces a
 spec-valid Anthropic response so Claude Code's own retry/UX logic works.
+Requests are routed across the backend fleet with session affinity; fast-
+role responses are served from the exact-match response cache when possible.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -13,22 +16,29 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+
+DASHBOARD = Path(__file__).parent / "static" / "dashboard.html"
 
 from harness import relay
 from harness.backends.base import BackendError
-from harness.backends.openai_compat import make_backend
+from harness.backends.pool import BackendPool
+from harness.cache import ResponseCache, payload_key
 from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
 from harness.config import Settings
+from harness.ir import Done
+from harness.log import RequestLogger
+from harness.memory import MemoryManager, MemoryStage
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
-from harness.profiles.registry import get_profile
+from harness.router import Router, session_key
 from harness.tokens.counter import HeuristicCounter, count_conversation
+from harness.traces import TraceStore
 
 STAGES = [
     SystemPromptStage(),
@@ -37,6 +47,7 @@ STAGES = [
     HistoryStage(),
     FewshotStage(),
 ]
+TTFT_WINDOW = 500
 
 
 def _dump(settings: Settings, kind: str, data: dict) -> None:
@@ -48,13 +59,46 @@ def _dump(settings: Settings, kind: str, data: dict) -> None:
     (d / name).write_text(json.dumps(data, indent=2))
 
 
+def _percentile(values: list[int], pct: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[min(int(len(ordered) * pct), len(ordered) - 1)]
+
+
+async def _replay(events):
+    for ev in events:
+        yield ev
+
+
 def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = None) -> FastAPI:
     app = FastAPI(title="ai-harness")
     client = backend_client or httpx.AsyncClient(timeout=httpx.Timeout(300, connect=10))
-    backend = make_backend(settings.backend, client)
-    profile = get_profile(settings.profile.name)
+    pool = BackendPool(settings, client)
+    router = Router(pool, settings)
+    rcache = ResponseCache(settings.cache.ttl_s, settings.cache.max_entries)
     counter = HeuristicCounter()
-    stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0}
+    logger = RequestLogger(settings.log.requests_path)
+    traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
+
+    async def fast_complete(messages: list[dict]) -> str:
+        candidates = pool.with_role("fast") or pool.backends
+        b = min(candidates, key=lambda x: x.in_flight)
+        payload = {
+            "model": b.model_name, "messages": messages, "max_tokens": 400,
+            "stream": True, "stream_options": {"include_usage": True},
+        }
+        from harness.ir import TextDelta
+        text = ""
+        async for ev in b.profile.parse(b.stream(payload)):
+            if isinstance(ev, TextDelta):
+                text += ev.text
+        return text
+
+    memory = MemoryManager(settings, fast_complete if settings.memory.enabled else None)
+    stages = STAGES + [MemoryStage(memory, settings)]
+    stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
+             "cached_tokens": 0}
 
     def invalid_request(message: str) -> JSONResponse:
         return JSONResponse(error_body("invalid_request_error", message), status_code=400)
@@ -73,38 +117,111 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
             return invalid_request(f"could not decode request: {exc!r}")
 
         _dump(settings, "anthropic-request", body)
-        conv = run_pipeline(conv, settings, STAGES)
-        _dump(settings, "rendered-payload", profile.render(conv, settings.backend.model))
+        conv = run_pipeline(conv, settings, stages)
+
+        chosen = router.pick(body)
+        skey = session_key(body)
+        role = "fast" if "haiku" in (body.get("model") or "") else "main"
+        rendered = chosen.profile.render(conv, chosen.model_name)
+        _dump(settings, "rendered-payload", rendered)
 
         stats["requests"] += 1
         msg_id = "msg_" + uuid.uuid4().hex[:24]
-        model = body.get("model", settings.backend.model)
-        events = relay.run(conv, profile, backend, settings)
+        model = body.get("model", chosen.model_name)
+        metrics: dict = {}
+        record: dict = {
+            "request_id": msg_id,
+            "session_key": skey,
+            "model": model,
+            "backend": chosen.name,
+            "role": role,
+            "stream": conv.params.stream,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "stop_reason": None,
+            "ttft_ms": None,
+        }
+        start = time.monotonic()
+
+        cacheable = settings.cache.enabled and role in settings.cache.roles
+        cache_key = payload_key(rendered) if cacheable else None
+        cached_events = rcache.get(cache_key) if cache_key else None
+        if cached_events is not None:
+            record["cache"] = "response"
+            events = _replay(cached_events)
+        else:
+            events = relay.run(conv, chosen.profile, chosen, settings, metrics=metrics)
+
+        buffer: list = []
+
+        async def _instrument(evs):
+            async for ev in evs:
+                if record["ttft_ms"] is None:
+                    ttft = int((time.monotonic() - start) * 1000)
+                    record["ttft_ms"] = ttft
+                    chosen.ttft_ms.append(ttft)
+                    del chosen.ttft_ms[:-TTFT_WINDOW]
+                if isinstance(ev, Done):
+                    record["input_tokens"] = ev.input_tokens
+                    record["output_tokens"] = ev.output_tokens
+                    record["cached_tokens"] = ev.cached_tokens
+                    record["stop_reason"] = ev.stop_reason
+                    stats["input_tokens"] += ev.input_tokens
+                    stats["output_tokens"] += ev.output_tokens
+                    stats["cached_tokens"] += ev.cached_tokens
+                    chosen.prompt_tokens += ev.input_tokens
+                    chosen.cached_tokens += ev.cached_tokens
+                if (cache_key and cached_events is None) or settings.traces.enabled:
+                    buffer.append(ev)
+                yield ev
+
+        def _finish_record() -> None:
+            record["wall_ms"] = int((time.monotonic() - start) * 1000)
+            if record["ttft_ms"] is None:
+                record["ttft_ms"] = record["wall_ms"]
+            record.update(metrics)
+            if (
+                cache_key
+                and cached_events is None
+                and "error" not in record
+                and buffer
+                and isinstance(buffer[-1], Done)
+            ):
+                rcache.put(cache_key, buffer)
+            if settings.traces.enabled and cached_events is None:
+                traces.append(skey, msg_id, rendered, buffer, dict(metrics))
+            if settings.memory.enabled and role == "main":
+                memory.note(skey, conv.system, rendered.get("messages", []))
+                try:
+                    asyncio.get_running_loop().create_task(memory.sweep())
+                except RuntimeError:
+                    pass
+            logger.write(record)
 
         if conv.params.stream:
             async def sse():
                 try:
-                    async for piece in stream_sse(_track(events), model, msg_id):
+                    async for piece in stream_sse(_instrument(events), model, msg_id):
                         yield piece
                 except BackendError as exc:
                     stats["errors"] += 1
+                    record["error"] = str(exc)
                     yield error_sse("overloaded_error", str(exc))
+                finally:
+                    _finish_record()
 
             return StreamingResponse(sse(), media_type="text/event-stream")
 
         try:
-            collected = [e async for e in _track(events)]
+            collected = [e async for e in _instrument(events)]
         except BackendError as exc:
             stats["errors"] += 1
+            record["error"] = str(exc)
+            _finish_record()
             return JSONResponse(error_body("overloaded_error", str(exc)), status_code=529)
+        _finish_record()
         return JSONResponse(collect(collected, model, msg_id))
-
-    async def _track(events):
-        async for ev in events:
-            if hasattr(ev, "input_tokens"):
-                stats["input_tokens"] += ev.input_tokens
-                stats["output_tokens"] += ev.output_tokens
-            yield ev
 
     @app.post("/v1/messages/count_tokens")
     async def count_tokens(request: Request):
@@ -115,8 +232,30 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
             return invalid_request(f"could not decode request: {exc!r}")
         return JSONResponse({"input_tokens": count_conversation(conv, counter)})
 
+    @app.get("/dashboard")
+    async def dashboard():
+        return HTMLResponse(DASHBOARD.read_text())
+
     @app.get("/stats")
     async def get_stats():
-        return JSONResponse(stats)
+        backends = {}
+        for b in pool.backends:
+            total_prompt = b.prompt_tokens or 1
+            backends[b.name] = {
+                "model": b.model_name,
+                "roles": b.roles,
+                "requests": b.requests,
+                "errors": b.errors,
+                "in_flight": b.in_flight,
+                "down": b.is_down(),
+                "ttft_p50_ms": _percentile(b.ttft_ms, 0.50),
+                "ttft_p95_ms": _percentile(b.ttft_ms, 0.95),
+                "kv_cache_hit_pct": round(100 * b.cached_tokens / total_prompt, 1),
+            }
+        return JSONResponse({
+            **stats,
+            "backends": backends,
+            "response_cache": {"hits": rcache.hits, "misses": rcache.misses},
+        })
 
     return app

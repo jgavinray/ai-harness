@@ -1,0 +1,1 @@
+Where does this project read the WORKER_POOL_SIZE environment variable? Reply with the file path and the line number in the format path:line. Do not modify any files.

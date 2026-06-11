@@ -156,10 +156,16 @@ class Profile:
         calls: dict[int, dict[str, str]] = {}
         finish: str | None = None
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        cached = 0
+        evaluated: int | None = None  # llama.cpp timings.prompt_n
 
         async for chunk in chunks:
             if chunk.get("usage"):
                 usage.update({k: v for k, v in chunk["usage"].items() if v})
+                details = chunk["usage"].get("prompt_tokens_details") or {}
+                cached = max(cached, details.get("cached_tokens") or 0)
+            if chunk.get("timings"):
+                evaluated = chunk["timings"].get("prompt_n", evaluated)
             for choice in chunk.get("choices", []):
                 delta = choice.get("delta") or {}
                 if delta.get("reasoning_content"):
@@ -197,4 +203,8 @@ class Profile:
         stop_reason = FINISH_MAP.get(finish or "stop", "end_turn")
         if calls and stop_reason == "end_turn":
             stop_reason = "tool_use"
-        yield Done(stop_reason, usage["prompt_tokens"], usage["completion_tokens"])
+        if not cached and evaluated is not None and usage["prompt_tokens"]:
+            cached = max(usage["prompt_tokens"] - evaluated, 0)
+        yield Done(
+            stop_reason, usage["prompt_tokens"], usage["completion_tokens"], cached
+        )

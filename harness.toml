@@ -1,11 +1,49 @@
+# Fleet configuration for the local 3-server setup.
+
 [server]
+host = "127.0.0.1"
 port = 8484
 
-[backend]
+[[backends]]
+name = "qwen35"
+kind = "vllm"
+base_url = "http://192.168.0.33:8000/v1"
+model = "qwen36-35b-heretic"
+profile = "qwen"
+context_window = 262144
+roles = ["main"]
+
+[[backends]]
+name = "qwen27"
+kind = "vllm"
+base_url = "http://192.168.0.196:8001/v1"
+model = "qwen3.6-27b"
+profile = "qwen"
+context_window = 131072
+roles = ["subagent", "fast"]
+
+[[backends]]
+name = "gemma31"
 kind = "llamacpp"
 base_url = "http://192.168.0.196:8000/v1"
 model = "gemma-4-31b-q4-llamacpp"
-
-[profile]
-name = "gemma"
+profile = "gemma"
 context_window = 131072
+roles = ["subagent"]
+
+[pipeline]
+system_prompt = "replace"
+tool_prune = true
+max_tools = 8
+fewshot = true
+repair_retries = 2
+recent_turns_protected = 4
+reasoning = "thinking"
+
+[cache]
+enabled = true
+ttl_s = 600
+roles = ["fast"]
+
+[log]
+requests_path = "logs/requests.jsonl"

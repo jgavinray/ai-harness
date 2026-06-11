@@ -93,6 +93,7 @@ class Done:
     stop_reason: str  # end_turn | tool_use | max_tokens
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0  # prefix tokens served from the backend's KV cache
 
 
 IREvent = Union[TextDelta, ThinkingDelta, ToolCall, Done]

@@ -1,0 +1,90 @@
+import json
+import sys
+from pathlib import Path
+
+import httpx
+
+from harness.config import Settings
+from harness.ir import Done, TextDelta, ToolCall
+from harness.server import create_app
+from harness.traces import TraceStore, assistant_message, serialize_event
+from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk, tool_chunk
+from tests.test_server import request_body
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import corpus  # noqa: E402
+
+
+def test_event_round_trip_to_assistant_message():
+    events = [
+        serialize_event(TextDelta("let me ")),
+        serialize_event(TextDelta("read it")),
+        serialize_event(ToolCall("t1", "Read", {"file_path": "/x"})),
+        serialize_event(Done("tool_use", 10, 5)),
+    ]
+    msg = assistant_message(events)
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "let me read it"
+    assert json.loads(msg["tool_calls"][0]["function"]["arguments"]) == {"file_path": "/x"}
+
+
+def test_trace_store_tag_and_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_TRACE_TAG", "model-full-fix-test-0")
+    store = TraceStore(tmp_path)
+    store.append("sess1", "req1", {"messages": []}, [TextDelta("x")], {"retries": 0})
+    rec = json.loads((tmp_path / "sessions.jsonl").read_text())
+    assert rec["tag"] == "model-full-fix-test-0"
+    assert rec["events"] == [{"t": "text", "text": "x"}]
+
+
+async def test_server_writes_traces(tmp_path):
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.traces.enabled = True
+    settings.traces.dir = str(tmp_path)
+    fake = FakeOpenAI()
+    fake.push([
+        text_chunk("on it"),
+        tool_chunk("c1", "Read", '{"file_path": "/x"}'),
+        finish_chunk("tool_calls"),
+    ])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://proxy"
+    ) as client:
+        await client.post("/v1/messages", json=request_body(stream=False))
+    rec = json.loads((tmp_path / "sessions.jsonl").read_text())
+    assert rec["payload"]["messages"][0]["role"] == "system"
+    assert any(e["t"] == "tool_call" for e in rec["events"])
+    assert rec["metrics"]["valid_calls"] == 1
+
+
+def test_corpus_filters_by_outcome_and_validity(tmp_path):
+    traces = tmp_path / "sessions.jsonl"
+    results = tmp_path / "results.jsonl"
+    out = tmp_path / "corpus.jsonl"
+    base = {
+        "payload": {"messages": [{"role": "user", "content": "hi"}],
+                    "tools": [{"type": "function", "function": {"name": "Read"}}]},
+        "events": [{"t": "text", "text": "ok"}, {"t": "done", "stop_reason": "end_turn",
+                                                  "input_tokens": 1, "output_tokens": 1,
+                                                  "cached_tokens": 0}],
+    }
+    traces.write_text("\n".join(json.dumps({**base, "tag": tag, "metrics": m}) for tag, m in [
+        ("good-0", {"invalid_calls": 0}),
+        ("bad-0", {"invalid_calls": 0}),       # trial failed -> excluded
+        ("good-1", {"invalid_calls": 2}),      # invalid calls -> excluded
+    ]))
+    results.write_text("\n".join(json.dumps(r) for r in [
+        {"tag": "good-0", "success": True},
+        {"tag": "good-1", "success": True},
+        {"tag": "bad-0", "success": False},
+    ]))
+    kept, total = corpus.build(traces, results, out)
+    assert (kept, total) == (1, 3)
+    rec = json.loads(out.read_text())
+    assert rec["messages"][-1]["role"] == "assistant"
+    assert rec["tools"][0]["function"]["name"] == "Read"
