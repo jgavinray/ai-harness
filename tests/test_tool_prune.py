@@ -1,0 +1,49 @@
+from harness.config import Settings
+from harness.ir import Conversation, GenParams, TextPart, ToolCallPart, ToolDef, Turn
+from harness.pipeline.tool_prune import CORE, ToolPruneStage
+
+
+def tool(name: str) -> ToolDef:
+    return ToolDef(name, f"{name} tool", {"type": "object"}, {"type": "object"})
+
+
+EXTRAS = ("WebSearch", "WebFetch", "NotebookEdit", "KillShell", "ListMcpResources",
+          "ReadMcpResource", "ExitPlanMode")
+ALL_TOOLS = tuple(tool(n) for n in CORE + EXTRAS)
+
+
+def conv(turns=()) -> Conversation:
+    return Conversation("s", tuple(turns), ALL_TOOLS, GenParams(max_tokens=100))
+
+
+def test_core_kept_extras_dropped():
+    out = ToolPruneStage().apply(conv(), Settings())
+    names = {t.name for t in out.tools}
+    assert names == set(CORE)
+    assert len(out.tools) == 8
+
+
+def test_recently_used_extra_kept():
+    turns = (
+        Turn("assistant", (ToolCallPart("t1", "WebFetch", {"url": "https://x"}),)),
+        Turn("user", (TextPart("ok"),)),
+    )
+    out = ToolPruneStage().apply(conv(turns), Settings())
+    names = [t.name for t in out.tools]
+    assert "WebFetch" in names
+    assert len(names) <= Settings().pipeline.max_tools
+
+
+def test_old_usage_not_kept():
+    s = Settings()
+    old = (Turn("assistant", (ToolCallPart("t1", "WebFetch", {"url": "u"}),)),)
+    filler = tuple(Turn("user", (TextPart(f"msg {i}"),)) for i in range(s.pipeline.recent_turns_protected + 1))
+    out = ToolPruneStage().apply(conv(old + filler), s)
+    assert "WebFetch" not in {t.name for t in out.tools}
+
+
+def test_toggle_off_identity():
+    s = Settings()
+    s.pipeline.tool_prune = False
+    out = ToolPruneStage().apply(conv(), s)
+    assert len(out.tools) == len(ALL_TOOLS)
