@@ -204,3 +204,49 @@ def test_session_key_ignores_billing_header_block():
     b2 = {"system": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.173; cch=bbbb;"}] + base,
           "messages": [{"role": "user", "content": "task"}]}
     assert session_key(b1) == session_key(b2)
+
+
+def capped_settings() -> Settings:
+    s = fleet_settings()
+    s.backends[0].max_in_flight = 1  # "big" (main role)
+    return s
+
+
+def test_backend_at_capacity_skipped():
+    pool = make_pool(capped_settings())
+    router = Router(pool, capped_settings())
+    pool.get("big").in_flight = 1  # saturated
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "t1"}]}
+    chosen = router.pick(body)
+    assert chosen.name != "big"
+
+
+def test_affinity_broken_when_at_capacity():
+    pool = make_pool(capped_settings())
+    router = Router(pool, capped_settings())
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "t2"}]}
+    first = router.pick(body)
+    assert first.name == "big"          # affinity established
+    pool.get("big").in_flight = 1       # now saturated
+    assert router.pick(body).name != "big"
+
+
+def test_all_at_capacity_falls_back_to_least_loaded():
+    s = fleet_settings()
+    for b in s.backends:
+        b.max_in_flight = 1
+    pool = make_pool(s)
+    router = Router(pool, s)
+    for b in pool.backends:
+        b.in_flight = 1
+    pool.get("gem").in_flight = 1
+    pool.get("mid").in_flight = 3
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "t3"}]}
+    # nothing available: degrade gracefully to least-loaded, never error
+    assert router.pick(body).in_flight == 1

@@ -72,6 +72,13 @@ class PooledBackend:
     def is_down(self) -> bool:
         return time.time() < self.cooldown_until
 
+    @property
+    def at_capacity(self) -> bool:
+        return (
+            self.cfg.max_in_flight is not None
+            and self.in_flight >= self.cfg.max_in_flight
+        )
+
     def trip(self, cooldown_s: float = COOLDOWN_S) -> None:
         self.consecutive_errors += 1
         self.errors += 1

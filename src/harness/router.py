@@ -81,20 +81,28 @@ class Router:
         if hit:
             name, ts = hit
             backend = self.pool.get(name)
-            if backend and not backend.is_down() and time.time() - ts < AFFINITY_TTL_S:
+            if (
+                backend
+                and not backend.is_down()
+                and not backend.at_capacity  # a stalled box beats a cold KV prefix
+                and time.time() - ts < AFFINITY_TTL_S
+            ):
                 self.affinity[key] = (name, time.time())
                 return backend
 
         role = request_role(body)
-        candidates = self.pool.with_role(role)
+        candidates = [b for b in self.pool.with_role(role) if not b.at_capacity]
         if role in ("main", "subagent"):
             # overflow: if every backend for the role is busy (or none up),
             # widen to the other agentic role
             other = "subagent" if role == "main" else "main"
             if not candidates or min(b.in_flight for b in candidates) > 0:
-                candidates = candidates + self.pool.with_role(other)
+                candidates = candidates + [
+                    b for b in self.pool.with_role(other) if not b.at_capacity
+                ]
         if not candidates:
-            # everything for the role is down; last resort = any backend at all
+            # everything for the role is down or saturated; degrade to any
+            # live backend (capacity becomes soft), then to anything at all
             candidates = [b for b in self.pool.backends if not b.is_down()] or self.pool.backends
 
         chosen = min(candidates, key=lambda b: b.in_flight)
