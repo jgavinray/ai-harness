@@ -32,7 +32,10 @@ context_window = 131072
 roles = ["subagent"]
 
 [debug]
-dump_prompts = true
+dump_prompts = false
+
+[traces]
+enabled = true
 
 [pipeline]
 system_prompt = "replace"
