@@ -173,3 +173,22 @@ def test_render_streams_from_backend_even_for_nonstream_client():
     # client); otherwise plain-JSON replies yield no events and no usage
     assert payload["stream"] is True
     assert payload["stream_options"] == {"include_usage": True}
+
+
+async def test_phantom_tool_slot_dropped():
+    # vLLM 0.19.x parallel-call bug: a slot streams an id with name=null and
+    # empty args, then never fills. It must not surface as a ToolCall.
+    chunks = [
+        chunk({"tool_calls": [
+            {"index": 0, "id": "a", "function": {"name": "Read", "arguments": ""}}]}),
+        chunk({"tool_calls": [
+            {"index": 0, "id": "a", "function": {"name": None, "arguments": '{"file_path": "/x"}'}}]}),
+        chunk({"tool_calls": [
+            {"index": 1, "id": "b", "function": {"name": None, "arguments": ""}}]}),
+        chunk({"tool_calls": [
+            {"index": 2, "id": "c", "function": {"name": "Read", "arguments": '{"file_path": "/y"}'}}]}),
+        chunk({}, finish="tool_calls"),
+    ]
+    events = [ev async for ev in get_profile("qwen").parse(aiter(chunks))]
+    calls = [ev for ev in events if isinstance(ev, ToolCall)]
+    assert [c.name for c in calls] == ["Read", "Read"]

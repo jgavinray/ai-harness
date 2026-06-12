@@ -197,6 +197,10 @@ class Profile:
 
         for slot in calls.values():
             raw = slot["arguments"]
+            if not slot["name"] and not raw.strip():
+                # vLLM ≤0.19 parallel-call phantom: id-only slot, no name, no
+                # args — carries zero information; dropping it avoids a retry.
+                continue
             try:
                 args = json.loads(raw) if raw else {}
                 yield ToolCall(slot["id"], slot["name"], args)
