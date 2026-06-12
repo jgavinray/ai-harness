@@ -266,6 +266,23 @@ def test_main_overflow_prefers_non_fast_backend():
     assert router.pick(body).name == "gem"
 
 
+def test_overflow_avoids_host_of_busy_backend():
+    # Two backends can share one physical box (qwen27 + gemma31 on .196).
+    # Overflowing onto a backend that shares a host with the saturated one
+    # adds prefill load to the same hardware instead of adding capacity;
+    # an idle backend on another host wins even if it is fast-tier.
+    s = fleet_settings()
+    s.backends[0].base_url = "http://shared:8001/v1"  # big (main)
+    s.backends[2].base_url = "http://shared:8000/v1"  # gem (subagent)
+    pool = make_pool(s)
+    router = Router(pool, s)
+    pool.get("big").in_flight = 1  # main busy -> overflow
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "overflow me"}]}
+    assert router.pick(body).name == "mid"
+
+
 def test_overflow_does_not_steal_affinity():
     # A small-context request may overflow while its warm backend is
     # saturated, but the overflow target must not capture the session's

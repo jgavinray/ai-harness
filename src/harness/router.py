@@ -105,11 +105,20 @@ class Router:
 
         role = request_role(body)
         candidates = [b for b in self.pool.with_role(role) if not b.at_capacity]
+        # Hosts whose hardware is already grinding on this role's traffic:
+        # overflowing onto a sibling backend there (two servers, one box)
+        # adds prefill load to the same GPU instead of adding capacity.
+        hot_hosts: set[str] = set()
         if role in ("main", "subagent"):
             # overflow: if every backend for the role is busy (or none up),
             # widen to the other agentic role
             other = "subagent" if role == "main" else "main"
             if not candidates or min(b.in_flight for b in candidates) > 0:
+                hot_hosts = {
+                    b.host
+                    for b in self.pool.with_role(role)
+                    if b.in_flight > 0 or b.at_capacity
+                }
                 candidates = candidates + [
                     b for b in self.pool.with_role(other) if not b.at_capacity
                 ]
@@ -118,11 +127,12 @@ class Router:
             # live backend (capacity becomes soft), then to anything at all
             candidates = [b for b in self.pool.backends if not b.is_down()] or self.pool.backends
 
-        # least-loaded; ties go to non-fast backends (fast-role hardware is
-        # the cheap tier), then to whoever has served least overall
+        # least-loaded; ties go to backends on a cold host, then non-fast
+        # backends (fast-role hardware is the cheap tier), then to whoever
+        # has served least overall
         chosen = min(
             candidates,
-            key=lambda b: (b.in_flight, "fast" in b.roles, b.requests),
+            key=lambda b: (b.in_flight, b.host in hot_hosts, "fast" in b.roles, b.requests),
         )
         # Overflow and degraded placements are temporary: recording them as
         # affinity would pin the session (and, once large, pin it forever via

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -48,6 +49,11 @@ class PooledBackend:
     @property
     def model_name(self) -> str:
         return self.cfg.model
+
+    @property
+    def host(self) -> str:
+        """Hostname only (port stripped): two servers on one box share a host."""
+        return urlparse(self.cfg.base_url).hostname or self.cfg.base_url
 
     @property
     def constrained(self) -> bool:
