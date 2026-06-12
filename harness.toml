@@ -12,7 +12,7 @@ model = "qwen36-35b-heretic"  # Qwen3.6-35B-A3B MoE: ~3B active params + Heretic
 profile = "qwen"
 context_window = 262144
 roles = ["fast", "subagent"]
-max_in_flight = 2  # GB10 saturates past this even though vLLM accepts more
+max_in_flight = 1  # GB10 sustains exactly one request even though vLLM accepts more
 
 [[backends]]
 name = "qwen27"
