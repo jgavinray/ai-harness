@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from harness.config import Settings
-from harness.ir import Conversation, TextPart, ToolResultPart, Turn
+from harness.ir import Conversation, TextPart, ToolCallPart, ToolResultPart, Turn
 from harness.tokens.counter import HeuristicCounter, count_conversation
 
 ELISION = "\n…[elided by harness]…\n"
@@ -23,7 +23,26 @@ MARGIN = 1024
 # the next few turns don't immediately re-trigger it (rewriting old turns
 # every turn would invalidate the backend's KV prefix cache each request).
 TARGET_RATIO = 0.8
-EVICT_MARKER = Turn("user", (TextPart("[earlier conversation elided by harness]"),))
+DIGEST_MAX_TOOLS = 8
+
+
+def _digest(evicted: list[tuple[Turn, ...]]) -> Turn:
+    """Deterministic summary of evicted groups: byte-stable between
+    compaction events so the backend KV prefix is only invalidated when
+    eviction itself changes, and zero-latency (no LLM call)."""
+    n_turns = sum(len(g) for g in evicted)
+    tools: list[str] = []
+    for g in evicted:
+        for t in g:
+            for p in t.parts:
+                if isinstance(p, ToolCallPart) and p.name not in tools:
+                    tools.append(p.name)
+    used = ", ".join(tools[:DIGEST_MAX_TOOLS]) or "no tools"
+    text = (
+        f"[{n_turns} earlier turns elided by harness; tools used: {used}. "
+        "Results of that work appear in later turns.]"
+    )
+    return Turn("user", (TextPart(text),))
 
 
 def _truncate_results(turn: Turn) -> Turn:
@@ -87,11 +106,10 @@ class HistoryStage:
         ):
             anchor, head = head[:1], head[1:]
         groups = _groups(head)
-        evicted = False
+        dropped: list[tuple[Turn, ...]] = []
         while groups and count_conversation(conv, self.counter) > target:
-            groups.pop(0)
-            evicted = True
+            dropped.append(groups.pop(0))
             kept = tuple(t for g in groups for t in g)
-            marker = (EVICT_MARKER,) if evicted else ()
+            marker = (_digest(dropped),) if dropped else ()
             conv = replace(conv, turns=anchor + marker + kept + tail)
         return conv

@@ -86,3 +86,15 @@ def test_eviction_pins_first_user_turn():
         p.text for p in out.turns[0].parts if isinstance(p, TextPart)
     ] + [p.text for p in out.turns[1].parts if isinstance(p, TextPart)]
     assert any("fix the bug" in t for t in first_texts)
+
+
+def test_eviction_digest_names_tools():
+    conv = big_session(20, 8000)
+    out = HistoryStage().apply(conv, small_settings(4000))
+    marker_texts = [
+        p.text for t in out.turns for p in t.parts
+        if isinstance(p, TextPart) and "elided" in p.text
+    ]
+    assert marker_texts, "digest marker missing"
+    assert "Read" in marker_texts[0]          # names the tools used
+    assert "turns" in marker_texts[0]         # says how much was cut
