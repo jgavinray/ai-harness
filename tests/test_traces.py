@@ -88,3 +88,31 @@ def test_corpus_filters_by_outcome_and_validity(tmp_path):
     rec = json.loads(out.read_text())
     assert rec["messages"][-1]["role"] == "assistant"
     assert rec["tools"][0]["function"]["name"] == "Read"
+
+
+def test_corpus_includes_clean_live_traces(tmp_path):
+    # Live (untagged) traffic has no eval result row; with include_live it
+    # must be kept when execution was clean, and a clean execution also
+    # requires retries == 0 (a retried request's stored payload no longer
+    # matches its emitted events).
+    traces = tmp_path / "sessions.jsonl"
+    results = tmp_path / "results.jsonl"
+    out = tmp_path / "corpus.jsonl"
+    base = {
+        "payload": {"messages": [{"role": "user", "content": "hi"}]},
+        "events": [{"t": "text", "text": "ok"}, {"t": "done", "stop_reason": "end_turn",
+                                                  "input_tokens": 1, "output_tokens": 1,
+                                                  "cached_tokens": 0}],
+    }
+    traces.write_text("\n".join(json.dumps({**base, "tag": "", "metrics": m}) for m in [
+        {"invalid_calls": 0, "retries": 0, "degenerate_aborts": 0},   # kept
+        {"invalid_calls": 0, "retries": 1, "degenerate_aborts": 0},   # retried -> excluded
+        {"invalid_calls": 1, "retries": 0, "degenerate_aborts": 0},   # invalid -> excluded
+        {"invalid_calls": 0, "retries": 0, "degenerate_aborts": 1},   # degenerate -> excluded
+    ]))
+    results.write_text("")
+    kept, total = corpus.build(traces, results, out, include_live=True)
+    assert (kept, total) == (1, 4)
+    # default behavior unchanged: untagged traces stay excluded
+    kept, total = corpus.build(traces, results, out)
+    assert (kept, total) == (0, 4)

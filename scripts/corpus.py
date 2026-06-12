@@ -7,7 +7,9 @@
       --out corpus.jsonl
 
 Keeps only requests from trials that passed their checker, and only requests
-whose tool calls all validated (zero invalid_calls). Output: one JSONL record
+whose tool calls all validated (zero invalid_calls). With --include-live,
+untagged live-session traces are also kept when execution was mechanically
+clean (no invalid calls, no retries, no degenerate aborts). Output: one JSONL record
 per request, {"messages": [...full rendered context..., assistant_reply]} in
 OpenAI chat format — directly usable for LoRA SFT of a smaller model.
 """
@@ -32,16 +34,33 @@ def successful_tags(results_path: Path) -> set[str]:
     return tags
 
 
-def build(traces_path: Path, results_path: Path, out_path: Path) -> tuple[int, int]:
+def _clean_execution(metrics: dict) -> bool:
+    """A live trace is corpus-grade only if nothing went wrong mechanically.
+    retries matter beyond hygiene: a retried request's stored payload no
+    longer matches its emitted events (feedback turns were appended)."""
+    return not any(
+        metrics.get(k) for k in ("invalid_calls", "retries", "degenerate_aborts")
+    )
+
+
+def build(
+    traces_path: Path,
+    results_path: Path,
+    out_path: Path,
+    include_live: bool = False,
+) -> tuple[int, int]:
     keep_tags = successful_tags(results_path)
     kept = total = 0
     with out_path.open("w") as out:
         for line in traces_path.read_text().splitlines():
             total += 1
             trace = json.loads(line)
-            if trace.get("tag") not in keep_tags:
+            metrics = trace.get("metrics", {})
+            tagged_ok = trace.get("tag") in keep_tags
+            live_ok = include_live and not trace.get("tag") and _clean_execution(metrics)
+            if not (tagged_ok or live_ok):
                 continue
-            if trace.get("metrics", {}).get("invalid_calls"):
+            if metrics.get("invalid_calls"):
                 continue
             messages = trace["payload"]["messages"] + [assistant_message(trace["events"])]
             record = {"messages": messages}
@@ -57,8 +76,11 @@ def main() -> None:
     ap.add_argument("--traces", default="traces/sessions.jsonl")
     ap.add_argument("--results", default="evals/results/results.jsonl")
     ap.add_argument("--out", default="corpus.jsonl")
+    ap.add_argument("--include-live", action="store_true",
+                    help="also keep untagged live-session traces with clean execution")
     args = ap.parse_args()
-    kept, total = build(Path(args.traces), Path(args.results), Path(args.out))
+    kept, total = build(Path(args.traces), Path(args.results), Path(args.out),
+                        include_live=args.include_live)
     print(f"corpus: kept {kept}/{total} requests -> {args.out}")
 
 
