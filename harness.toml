@@ -22,6 +22,7 @@ model = "qwen3.6-27b"
 profile = "qwen"
 context_window = 131072
 roles = ["main"]
+max_in_flight = 2
 
 [[backends]]
 name = "gemma31"
@@ -31,6 +32,7 @@ model = "gemma-4-31b-q4-llamacpp"
 profile = "gemma"
 context_window = 131072
 roles = ["subagent"]
+max_in_flight = 2
 
 [debug]
 dump_prompts = false
