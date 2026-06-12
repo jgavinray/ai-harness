@@ -192,3 +192,15 @@ def test_router_routes_subagent_fingerprint_to_subagent_backend():
             "messages": [{"role": "user", "content": "explore"}]}
     chosen = router.pick(body)
     assert chosen.name in ("mid", "gem")  # the subagent-role backends
+
+
+def test_session_key_ignores_billing_header_block():
+    # Claude Code prepends a billing-header text block whose content varies
+    # per request; it must not change the session key or affinity breaks
+    # (and trace rows lose their session grouping).
+    base = [{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."}]
+    b1 = {"system": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.173; cch=aaaa;"}] + base,
+          "messages": [{"role": "user", "content": "task"}]}
+    b2 = {"system": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.173; cch=bbbb;"}] + base,
+          "messages": [{"role": "user", "content": "task"}]}
+    assert session_key(b1) == session_key(b2)

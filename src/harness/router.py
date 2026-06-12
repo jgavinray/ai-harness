@@ -18,11 +18,21 @@ AFFINITY_TTL_S = 3600.0
 KEY_BASIS_CHARS = 2048
 
 
+# Claude Code prepends a per-request billing block; its content varies between
+# requests of one session, so it must never enter the session-identity basis.
+VOLATILE_BLOCK_PREFIXES = ("x-anthropic-billing-header:",)
+
+
 def _flatten(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+        return "\n".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict)
+            and not b.get("text", "").startswith(VOLATILE_BLOCK_PREFIXES)
+        )
     return ""
 
 
