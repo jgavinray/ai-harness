@@ -284,3 +284,4 @@ async def test_stats_rehydrated_from_request_log(tmp_path):
     assert d["requests"] == 2  # cache hit excluded, ghost unknown
     assert d["errors"] == 1
     assert d["kv_cache_hit_pct"] == 20.0  # 40 cached / 200 prompt
+    assert d["kv_written_tokens"] == 160  # 200 prompt - 40 cached

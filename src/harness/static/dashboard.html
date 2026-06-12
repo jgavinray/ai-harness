@@ -26,7 +26,7 @@
 <table>
   <thead><tr>
     <th>backend</th><th>model</th><th>roles</th><th>state</th><th>req</th>
-    <th>err</th><th>in-flight</th><th>ttft p50</th><th>ttft p95</th><th>kv cache</th>
+    <th>err</th><th>in-flight</th><th>ttft p50</th><th>ttft p95</th><th>kv cache</th><th>kv writes</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -43,6 +43,7 @@ async function tick() {
       ["input tok", fmt(s.input_tokens)],
       ["output tok", fmt(s.output_tokens)],
       ["kv cached tok", fmt(s.cached_tokens)],
+      ["kv written tok", fmt(s.input_tokens - s.cached_tokens)],
       ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–"],
     ];
     document.getElementById("cards").innerHTML = cards
@@ -55,6 +56,7 @@ async function tick() {
         <td>${fmt(b.requests)}</td><td>${fmt(b.errors)}</td><td>${b.in_flight}</td>
         <td>${fmt(b.ttft_p50_ms)} ms</td><td>${fmt(b.ttft_p95_ms)} ms</td>
         <td>${b.kv_cache_hit_pct}%</td>
+        <td>${fmt(b.kv_written_tokens)}</td>
       </tr>`).join("");
   } catch (e) {
     document.getElementById("err").textContent = "— stats unreachable";

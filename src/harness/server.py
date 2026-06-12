@@ -308,6 +308,8 @@ def create_app(
                 "ttft_p50_ms": _percentile(b.ttft_ms, 0.50),
                 "ttft_p95_ms": _percentile(b.ttft_ms, 0.95),
                 "kv_cache_hit_pct": round(100 * b.cached_tokens / total_prompt, 1),
+                # prefill tokens computed fresh = tokens written into KV cache
+                "kv_written_tokens": b.prompt_tokens - b.cached_tokens,
             }
         return JSONResponse({
             **stats,
