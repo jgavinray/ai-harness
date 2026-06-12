@@ -34,6 +34,40 @@ def successful_tags(results_path: Path) -> set[str]:
     return tags
 
 
+LOOP_THRESHOLD = 3  # mirrors harness.relay: identical calls at/over this = loop
+
+
+def _conversation_id(trace: dict) -> str:
+    """Stable per-conversation grouping key: the first user message of the
+    rendered payload (session_key in older trace rows varied per request)."""
+    for m in trace.get("payload", {}).get("messages", []):
+        if m.get("role") == "user":
+            return str(m.get("content"))[:512]
+    return trace.get("session_key", "")
+
+
+def _loopy_conversations(rows: list[dict]) -> set[str]:
+    """Conversations showing cross-turn repetition or relay loop-breaks.
+    Mechanically clean requests from a flailing session are behavioral
+    garbage; admitting them would teach a fine-tune to flail."""
+    seen: dict[str, dict[str, int]] = {}
+    loopy: set[str] = set()
+    for trace in rows:
+        cid = _conversation_id(trace)
+        if trace.get("metrics", {}).get("loop_breaks"):
+            loopy.add(cid)
+            continue
+        counts = seen.setdefault(cid, {})
+        for e in trace.get("events", []):
+            if e.get("t") != "tool_call":
+                continue
+            key = e.get("name", "") + json.dumps(e.get("arguments"), sort_keys=True)
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] >= LOOP_THRESHOLD:
+                loopy.add(cid)
+    return loopy
+
+
 def _clean_execution(metrics: dict) -> bool:
     """A live trace is corpus-grade only if nothing went wrong mechanically.
     retries matter beyond hygiene: a retried request's stored payload no
@@ -50,14 +84,20 @@ def build(
     include_live: bool = False,
 ) -> tuple[int, int]:
     keep_tags = successful_tags(results_path)
+    rows = [json.loads(line) for line in traces_path.read_text().splitlines()]
+    loopy = _loopy_conversations(rows) if include_live else set()
     kept = total = 0
     with out_path.open("w") as out:
-        for line in traces_path.read_text().splitlines():
+        for trace in rows:
             total += 1
-            trace = json.loads(line)
             metrics = trace.get("metrics", {})
             tagged_ok = trace.get("tag") in keep_tags
-            live_ok = include_live and not trace.get("tag") and _clean_execution(metrics)
+            live_ok = (
+                include_live
+                and not trace.get("tag")
+                and _clean_execution(metrics)
+                and _conversation_id(trace) not in loopy
+            )
             if not (tagged_ok or live_ok):
                 continue
             if metrics.get("invalid_calls"):

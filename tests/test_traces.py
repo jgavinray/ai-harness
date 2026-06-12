@@ -116,3 +116,32 @@ def test_corpus_includes_clean_live_traces(tmp_path):
     # default behavior unchanged: untagged traces stay excluded
     kept, total = corpus.build(traces, results, out)
     assert (kept, total) == (0, 4)
+
+
+def test_corpus_excludes_loopy_sessions(tmp_path):
+    # A session that repeats an identical tool call >= 3 times is behavioral
+    # garbage even when every request is mechanically clean; none of its
+    # rows may enter the corpus.
+    traces = tmp_path / "sessions.jsonl"
+    results = tmp_path / "results.jsonl"
+    out = tmp_path / "corpus.jsonl"
+    clean = {"invalid_calls": 0, "retries": 0, "degenerate_aborts": 0}
+
+    def row(session_user, call_args):
+        return {
+            "tag": "", "metrics": clean,
+            "payload": {"messages": [{"role": "system", "content": "s"},
+                                     {"role": "user", "content": session_user}]},
+            "events": [{"t": "tool_call", "id": "c", "name": "Bash", "arguments": call_args},
+                       {"t": "done", "stop_reason": "tool_use",
+                        "input_tokens": 1, "output_tokens": 1, "cached_tokens": 0}],
+        }
+
+    loopy = [row("loop session", {"command": "git worktree list"}) for _ in range(4)]
+    healthy = [row("good session", {"command": f"ls /{i}"}) for i in range(4)]
+    traces.write_text("\n".join(json.dumps(r) for r in loopy + healthy))
+    results.write_text("")
+    kept, total = corpus.build(traces, results, out, include_live=True)
+    assert (kept, total) == (4, 8)
+    recs = [json.loads(l) for l in out.read_text().splitlines()]
+    assert all("good session" in json.dumps(r) for r in recs)
