@@ -106,3 +106,42 @@ async def test_degenerate_stream_aborted():
     assert evs[-1].stop_reason == "end_turn"
     streamed = "".join(e.text for e in evs if isinstance(e, TextDelta))
     assert len(streamed) < 4500  # aborted well before 300 chunks
+
+
+def conv_with_repeats(n: int) -> Conversation:
+    from harness.ir import ToolCallPart, ToolResultPart
+    turns: list[Turn] = [Turn("user", (TextPart("find the config"),))]
+    for i in range(n):
+        turns.append(Turn("assistant", (ToolCallPart(f"t{i}", "Read", {"file_path": "/x"}),)))
+        turns.append(Turn("user", (ToolResultPart(f"t{i}", "same content"),)))
+    return Conversation(
+        "sys", tuple(turns),
+        (ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA),),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_cross_turn_loop_broken_with_feedback():
+    import json
+    # history already holds the identical call 3x; the 4th must trigger
+    # loop-break feedback instead of being yielded
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c9", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    fake.push([text_chunk("the config is in /x; done"), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    evs = [e async for e in run(conv_with_repeats(3), get_profile("qwen"), backend, Settings())]
+    assert not any(isinstance(e, ToolCall) for e in evs)
+    assert len(fake.requests) == 2
+    assert "identical" in json.dumps(fake.requests[1])
+    assert evs[-1].stop_reason == "end_turn"
+
+
+async def test_two_prior_repeats_pass_through():
+    # re-running a command a couple of times is legitimate (e.g. pytest
+    # after a fix); only sustained repetition is broken
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c9", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    evs = [e async for e in run(conv_with_repeats(2), get_profile("qwen"), backend, Settings())]
+    assert any(isinstance(e, ToolCall) for e in evs)
+    assert len(fake.requests) == 1

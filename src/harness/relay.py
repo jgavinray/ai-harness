@@ -22,11 +22,48 @@ from harness.ir import (
     TextPart,
     ThinkingDelta,
     ToolCall,
+    ToolCallPart,
     Turn,
 )
 from harness.profiles.base import Profile
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
+
+
+# Cross-turn loop breaking: the DegenerateDetector catches repetition inside
+# one response; nothing else stops a model re-running the identical command
+# turn after turn (observed: a 400-turn `git worktree list` loop).
+LOOP_THRESHOLD = 3
+LOOP_WINDOW_TURNS = 12
+
+
+def _repeat_count(conv: Conversation, call: ToolCall) -> int:
+    n = 0
+    for turn in conv.turns[-LOOP_WINDOW_TURNS:]:
+        if turn.role != "assistant":
+            continue
+        for p in turn.parts:
+            if (
+                isinstance(p, ToolCallPart)
+                and p.name == call.name
+                and p.arguments == call.arguments
+            ):
+                n += 1
+    return n
+
+
+def _append_loop_feedback(conv: Conversation, call: ToolCall, seen: int) -> Conversation:
+    feedback = (
+        f"You have already called {call.name!r} with these identical arguments "
+        f"{seen} times in this conversation; the result will not change. "
+        "Do not repeat it. Use the results you already have, take a different "
+        "action, or state your conclusion."
+    )
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[repeated tool call suppressed: {call.name}]"),)),
+        Turn("user", (TextPart(feedback),)),
+    )
+    return replace(conv, turns=turns)
 
 
 def _append_feedback(conv: Conversation, bad: ToolCall, error: str) -> Conversation:
@@ -56,6 +93,7 @@ async def run(
     m.setdefault("valid_calls", 0)
     m.setdefault("invalid_calls", 0)
     m.setdefault("degenerate_aborts", 0)
+    m.setdefault("loop_breaks", 0)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
@@ -69,6 +107,8 @@ async def run(
         detector = DegenerateDetector()
         bad_call: ToolCall | None = None
         bad_error = ""
+        loop_call: ToolCall | None = None
+        loop_seen = 0
         emitted_valid_call = False
 
         async for ev in profile.parse(backend.stream(payload)):
@@ -86,6 +126,10 @@ async def run(
             elif isinstance(ev, ToolCall):
                 fixed, error = repair_toolcall(ev, conv.tools)
                 if fixed is not None:
+                    seen = _repeat_count(conv, fixed)
+                    if seen >= LOOP_THRESHOLD and attempts < settings.pipeline.repair_retries:
+                        loop_call, loop_seen = fixed, seen
+                        break
                     emitted_valid_call = True
                     m["valid_calls"] += 1
                     if ev.raw_arguments:  # arrived malformed, json-repaired locally
@@ -105,6 +149,13 @@ async def run(
                 else:
                     yield ev
                 return
+
+        if loop_call is not None:
+            attempts += 1
+            m["loop_breaks"] += 1
+            suppress_text = True
+            conv = _append_loop_feedback(conv, loop_call, loop_seen)
+            continue
 
         if bad_call is None:
             # stream ended without a Done (backend quirk); close the turn
