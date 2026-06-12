@@ -1,0 +1,20 @@
+services:
+  ai-harness:
+    build:
+      context: .
+    image: ai-harness:local
+    container_name: ai-harness
+    restart: unless-stopped
+    ports:
+      - "8484:8484"
+    volumes:
+      - ./docker/harness.toml:/config/harness.toml:ro
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8484/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

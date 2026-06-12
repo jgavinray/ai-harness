@@ -1,0 +1,28 @@
+# Container-ready quickstart config.
+# For a backend running directly on the Docker host, keep host.docker.internal.
+
+[server]
+host = "0.0.0.0"
+port = 8484
+
+[backend]
+kind = "openai"
+base_url = "http://host.docker.internal:11434/v1"
+model = "qwen2.5-coder:32b"
+api_key = "local"
+
+[profile]
+name = "qwen"
+context_window = 32768
+
+[pipeline]
+system_prompt = "replace"
+tool_prune = true
+max_tools = 8
+fewshot = true
+repair_retries = 2
+recent_turns_protected = 4
+reasoning = "thinking"
+
+[log]
+requests_path = "logs/requests.jsonl"
