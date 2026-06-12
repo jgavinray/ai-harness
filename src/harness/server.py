@@ -49,6 +49,7 @@ STAGES = [
 ]
 TTFT_WINDOW = 500
 CACHE_WINDOW = 100  # requests in the rolling kv-hit window
+KV_USED_TTL_S = 60.0  # how long a missed poll may serve the last good reading
 
 # Prometheus gauge (0..1) for live KV pool occupancy, per backend kind.
 # llama.cpp only serves /metrics when launched with --metrics.
@@ -362,6 +363,10 @@ def create_app(
         usages = await asyncio.gather(*(_kv_usage(b, client) for b in pool.backends))
         backends = {}
         for b, kv_used in zip(pool.backends, usages):
+            if kv_used is not None:
+                b.kv_used, b.kv_used_ts = kv_used, time.monotonic()
+            elif time.monotonic() - b.kv_used_ts < KV_USED_TTL_S:
+                kv_used = b.kv_used  # hold last good reading across a missed poll
             total_prompt = b.prompt_tokens or 1
             recent_prompt = sum(p for p, _ in b.recent_cache) or 1
             recent_cached = sum(c for _, c in b.recent_cache)

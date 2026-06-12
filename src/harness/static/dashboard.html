@@ -33,10 +33,14 @@
 </table>
 <script>
 const fmt = n => (n ?? 0).toLocaleString();
+let last = "";
 async function tick() {
   try {
     const s = await (await fetch("/stats")).json();
     document.getElementById("err").textContent = "";
+    const now = JSON.stringify(s);
+    if (now === last) return;  // nothing changed: leave the DOM alone
+    last = now;
     const cacheTotal = s.response_cache.hits + s.response_cache.misses;
     const cards = [
       ["requests", fmt(s.requests)],

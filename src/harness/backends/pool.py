@@ -41,6 +41,9 @@ class PooledBackend:
         # session -> tokens of its last request here, insertion-ordered by
         # recency; basis for the llama.cpp KV-residency estimate
         self.kv_resident: dict[str, int] = {}
+        # last good KV-occupancy reading, held across missed polls
+        self.kv_used: dict | None = None
+        self.kv_used_ts = 0.0
 
     @property
     def model_name(self) -> str:

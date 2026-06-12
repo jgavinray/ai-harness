@@ -422,3 +422,29 @@ async def test_llamacpp_kv_used_prefers_live_slot_tokens(tmp_path):
     # live 700 > session estimate 100 -> 700 / 2000
     assert d["kv_used_pct"] == 35.0
     assert d["kv_used_est"] is True
+
+
+async def test_kv_used_holds_last_reading_between_successful_polls():
+    # a missed poll (busy backend, timeout) must not flicker the dashboard
+    # to "-": /stats keeps serving the last good reading within its TTL.
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = 'vllm:kv_cache_usage_perc{engine="0"} 0.42\n'
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["v"]
+        assert d["kv_used_pct"] == 42.0
+        fake.metrics_text = None  # poll now fails (501)
+        d = (await client.get("/stats")).json()["backends"]["v"]
+    assert d["kv_used_pct"] == 42.0  # held, not flickered to null
+    assert d["kv_used_est"] is False
