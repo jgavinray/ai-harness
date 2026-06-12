@@ -389,3 +389,36 @@ async def test_vllm_kv_used_is_measured_not_estimated():
         d = (await client.get("/stats")).json()["backends"]["v"]
     assert d["kv_used_pct"] == 42.0
     assert d["kv_used_est"] is False
+
+
+async def test_llamacpp_kv_used_prefers_live_slot_tokens(tmp_path):
+    # while a slot is processing, /slots reports real token counts; the
+    # estimate must never report less than what the engine shows live.
+    from harness.config import PoolBackendCfg
+
+    log = tmp_path / "requests.jsonl"
+    log.write_text(json.dumps({
+        "backend": "g", "session_key": "sA", "input_tokens": 100,
+        "output_tokens": 0, "cached_tokens": 0, "ttft_ms": 1}) + "\n")
+
+    fake = FakeOpenAI()
+    fake.slots = [
+        {"id": 0, "n_ctx": 1000, "is_processing": True, "n_prompt_tokens": 700},
+        {"id": 1, "n_ctx": 1000, "is_processing": False},
+    ]
+    settings = Settings()
+    settings.log.requests_path = str(log)
+    settings.backends = [
+        PoolBackendCfg(name="g", kind="llamacpp", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["g"]
+    # live 700 > session estimate 100 -> 700 / 2000
+    assert d["kv_used_pct"] == 35.0
+    assert d["kv_used_est"] is True

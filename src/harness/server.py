@@ -88,7 +88,10 @@ async def _kv_usage(b, client: httpx.AsyncClient) -> dict | None:
         capacity = sum(s.get("n_ctx") or 0 for s in slots)
         if not slots or not capacity:
             return None
-        resident = sum(list(b.kv_resident.values())[-len(slots):])
+        estimated = sum(list(b.kv_resident.values())[-len(slots):])
+        # busy slots report real token counts; never report below them
+        live = sum(s.get("n_prompt_tokens") or 0 for s in slots)
+        resident = max(estimated, live)
         return {"pct": round(100 * min(resident, capacity) / capacity, 1), "est": True}
     except (httpx.HTTPError, ValueError):
         return None
