@@ -89,9 +89,11 @@ def test_history_hysteresis():
     from harness.tokens.counter import count_conversation
     from tests.test_history import big_session, small_settings
 
-    s = small_settings(8000)
+    # window chosen so the protected tail is well under the compaction
+    # target; otherwise the target is unreachable and the assertion is vacuous
+    s = small_settings(16000)
     stage = HistoryStage()
-    out = stage.apply(big_session(20, 8000), s)
+    out = stage.apply(big_session(40, 8000), s)
     budget = s.profile.context_window - 1024 - 1024  # max_tokens=1024, margin
     # compacted well below budget so next turn doesn't immediately re-evict
     assert count_conversation(out, stage.counter) <= budget * TARGET_RATIO

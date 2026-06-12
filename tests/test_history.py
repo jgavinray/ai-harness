@@ -88,6 +88,30 @@ def test_eviction_pins_first_user_turn():
     assert any("fix the bug" in t for t in first_texts)
 
 
+def test_compaction_leaves_headroom_for_growth():
+    # Every compaction rewrites the prompt head, which invalidates the
+    # backend's KV prefix cache and forces a full re-prefill. After one
+    # compaction there must be enough headroom that several typical turns
+    # (~30% of the budget here) fit without re-triggering it.
+    from dataclasses import replace
+
+    conv = big_session(40, 8000)
+    s = small_settings(16000)
+    stage = HistoryStage()
+    compacted = stage.apply(conv, s)
+    assert len(compacted.turns) < len(conv.turns)  # compaction did run
+    grown = replace(
+        compacted,
+        turns=compacted.turns
+        + (
+            Turn("assistant", (ToolCallPart("tg", "Read", {"file_path": "/g"}),)),
+            Turn("user", (ToolResultPart("tg", "y" * 16000),)),
+        ),
+    )
+    out = stage.apply(grown, s)
+    assert out is grown  # still under budget: prefix untouched, KV cache rides
+
+
 def test_eviction_digest_names_tools():
     conv = big_session(20, 8000)
     out = HistoryStage().apply(conv, small_settings(4000))

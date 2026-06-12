@@ -22,7 +22,11 @@ MARGIN = 1024
 # When compaction triggers, compact down to this fraction of the budget so
 # the next few turns don't immediately re-trigger it (rewriting old turns
 # every turn would invalidate the backend's KV prefix cache each request).
-TARGET_RATIO = 0.8
+# 0.8 left only ~20% headroom: saturated sessions re-compacted every few
+# turns and re-prefilled their whole context each time (observed 21s TTFT
+# p50 at ~60k tokens). Half the budget keeps the prefix byte-stable ~2.5x
+# longer between full re-prefills.
+TARGET_RATIO = 0.5
 DIGEST_MAX_TOOLS = 8
 
 
