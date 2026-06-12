@@ -105,6 +105,11 @@ class Router:
             # live backend (capacity becomes soft), then to anything at all
             candidates = [b for b in self.pool.backends if not b.is_down()] or self.pool.backends
 
-        chosen = min(candidates, key=lambda b: b.in_flight)
+        # least-loaded; ties go to non-fast backends (fast-role hardware is
+        # the cheap tier), then to whoever has served least overall
+        chosen = min(
+            candidates,
+            key=lambda b: (b.in_flight, "fast" in b.roles, b.requests),
+        )
         self.affinity[key] = (chosen.name, time.time())
         return chosen

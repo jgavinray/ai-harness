@@ -250,3 +250,17 @@ def test_all_at_capacity_falls_back_to_least_loaded():
             "messages": [{"role": "user", "content": "t3"}]}
     # nothing available: degrade gracefully to least-loaded, never error
     assert router.pick(body).in_flight == 1
+
+
+def test_main_overflow_prefers_non_fast_backend():
+    # Overflow from main must prefer a dense subagent backend (gem) over a
+    # fast-role box (mid) when both are idle; fast-role hardware is the
+    # cheap tier and the last resort for main-quality work.
+    s = fleet_settings()
+    pool = make_pool(s)
+    router = Router(pool, s)
+    pool.get("big").in_flight = 1  # main busy -> overflow
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "overflow me"}]}
+    assert router.pick(body).name == "gem"
