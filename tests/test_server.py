@@ -197,3 +197,87 @@ async def test_pipeline_applied_end_to_end():
     assert len(sent["messages"][0]["content"]) < 5000
     assert "Working directory: /repo" in sent["messages"][0]["content"]
     assert len(sent["tools"]) <= 8
+
+
+def _fleet_toml(roles: str) -> str:
+    return (
+        '[[backends]]\nname = "alpha"\nbase_url = "http://fake/v1"\n'
+        f'model = "m"\ncontext_window = 32768\nroles = [{roles}]\n'
+    )
+
+
+async def test_admin_reload_applies_new_roles_and_keeps_stats(tmp_path):
+    from harness.config import load_settings
+
+    cfg = tmp_path / "harness.toml"
+    cfg.write_text(_fleet_toml('"main"'))
+    settings = load_settings(cfg)
+
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client, config_path=cfg)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    async with client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        assert resp.status_code == 200
+
+        cfg.write_text(_fleet_toml('"main", "fast"'))
+        resp = await client.post("/admin/reload")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["updated"] == ["alpha"]
+
+        stats = (await client.get("/stats")).json()
+    assert stats["backends"]["alpha"]["roles"] == ["main", "fast"]
+    assert stats["backends"]["alpha"]["requests"] == 1  # counter survived the reload
+    assert stats["requests"] == 1
+
+
+async def test_admin_reload_without_config_path_is_400():
+    fake = FakeOpenAI()
+    async with make_client(fake) as client:
+        resp = await client.post("/admin/reload")
+    assert resp.status_code == 400
+
+
+async def test_stats_rehydrated_from_request_log(tmp_path):
+    log = tmp_path / "requests.jsonl"
+    records = [
+        {"backend": "default", "input_tokens": 100, "output_tokens": 10,
+         "cached_tokens": 40, "ttft_ms": 120},
+        # response-cache hit: counted in tokens but not backend.requests
+        {"backend": "default", "cache": "response", "input_tokens": 100,
+         "output_tokens": 10, "cached_tokens": 0, "ttft_ms": 5},
+        {"backend": "default", "input_tokens": 0, "output_tokens": 0,
+         "cached_tokens": 0, "error": "boom"},
+        # backend no longer in the fleet: global totals only
+        {"backend": "ghost", "input_tokens": 50, "output_tokens": 5,
+         "cached_tokens": 0, "ttft_ms": 80},
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in records) + "\nnot json\n")
+
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.log.requests_path = str(log)
+    fake = FakeOpenAI()
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        stats = (await client.get("/stats")).json()
+
+    assert stats["requests"] == 4
+    assert stats["errors"] == 1
+    assert stats["input_tokens"] == 250
+    assert stats["output_tokens"] == 25
+    assert stats["cached_tokens"] == 40
+    d = stats["backends"]["default"]
+    assert d["requests"] == 2  # cache hit excluded, ghost unknown
+    assert d["errors"] == 1
+    assert d["kv_cache_hit_pct"] == 20.0  # 40 cached / 200 prompt

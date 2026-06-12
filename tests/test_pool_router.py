@@ -122,3 +122,39 @@ async def test_pool_marks_down_on_error_and_recovers():
     fake.push([text_chunk("hi"), finish_chunk()])
     chunks = [c async for c in pool.stream(b, {"model": "m", "messages": []})]
     assert chunks and b.is_down() is False
+
+
+def test_reconfigure_updates_roles_and_preserves_counters():
+    s = fleet_settings()
+    pool = make_pool(s)
+    big = pool.get("big")
+    big.requests, big.errors = 7, 1
+    big.prompt_tokens, big.cached_tokens = 1000, 400
+    big.ttft_ms = [100, 200]
+
+    s2 = fleet_settings()
+    s2.backends[0].roles = ["main", "subagent"]
+    s2.backends[0].context_window = 65536
+    summary = pool.reconfigure(s2)
+
+    assert pool.get("big") is big  # same object: counters survive by construction
+    assert big.roles == ["main", "subagent"]
+    assert big.cfg.context_window == 65536
+    assert (big.requests, big.errors) == (7, 1)
+    assert (big.prompt_tokens, big.cached_tokens) == (1000, 400)
+    assert big.ttft_ms == [100, 200]
+    assert summary["updated"] == ["big", "mid", "gem"]
+    assert summary["added"] == [] and summary["removed"] == []
+
+
+def test_reconfigure_adds_and_removes_backends():
+    pool = make_pool(fleet_settings())
+    s2 = fleet_settings()
+    s2.backends = [
+        s2.backends[0],
+        PoolBackendCfg(name="new", base_url="http://new/v1", model="n1", roles=["fast"]),
+    ]
+    summary = pool.reconfigure(s2)
+    assert [b.name for b in pool.backends] == ["big", "new"]
+    assert summary["added"] == ["new"]
+    assert summary["removed"] == ["gem", "mid"]

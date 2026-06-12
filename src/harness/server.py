@@ -26,7 +26,7 @@ from harness.backends.pool import BackendPool
 from harness.cache import ResponseCache, payload_key
 from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
-from harness.config import Settings
+from harness.config import Settings, load_settings
 from harness.ir import Done
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage
@@ -71,7 +71,47 @@ async def _replay(events):
         yield ev
 
 
-def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = None) -> FastAPI:
+def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
+    """Replay the request log so a restart doesn't zero /stats aggregates.
+
+    Mirrors live counting: response-cache hits never reached the backend, so
+    they skip the backend request counter but still carry their token usage.
+    """
+    p = Path(path)
+    if not p.exists():
+        return
+    with p.open() as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            stats["requests"] += 1
+            if r.get("error"):
+                stats["errors"] += 1
+            stats["input_tokens"] += r.get("input_tokens") or 0
+            stats["output_tokens"] += r.get("output_tokens") or 0
+            stats["cached_tokens"] += r.get("cached_tokens") or 0
+            b = pool.get(r.get("backend") or "")
+            if b is None:
+                continue
+            if r.get("cache") != "response":
+                b.requests += 1
+            if r.get("error"):
+                b.errors += 1
+            b.prompt_tokens += r.get("input_tokens") or 0
+            b.cached_tokens += r.get("cached_tokens") or 0
+            if r.get("ttft_ms") is not None:
+                b.ttft_ms.append(r["ttft_ms"])
+    for b in pool.backends:
+        del b.ttft_ms[:-TTFT_WINDOW]
+
+
+def create_app(
+    settings: Settings,
+    backend_client: httpx.AsyncClient | None = None,
+    config_path: str | Path | None = None,
+) -> FastAPI:
     app = FastAPI(title="ai-harness")
     client = backend_client or httpx.AsyncClient(timeout=httpx.Timeout(300, connect=10))
     pool = BackendPool(settings, client)
@@ -99,6 +139,8 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
     stages = STAGES + [MemoryStage(memory, settings)]
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
              "cached_tokens": 0}
+    if settings.log.requests_path:
+        _seed_stats(stats, pool, settings.log.requests_path)
 
     def invalid_request(message: str) -> JSONResponse:
         return JSONResponse(error_body("invalid_request_error", message), status_code=400)
@@ -238,6 +280,18 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
     @app.get("/dashboard")
     async def dashboard():
         return HTMLResponse(DASHBOARD.read_text())
+
+    @app.post("/admin/reload")
+    async def admin_reload():
+        if not config_path:
+            return JSONResponse(
+                {"error": "server was started without a config file; nothing to reload"},
+                status_code=400,
+            )
+        summary = pool.reconfigure(load_settings(config_path))
+        return JSONResponse(
+            {"scope": "backends only; other sections need a restart", **summary}
+        )
 
     @app.get("/stats")
     async def get_stats():

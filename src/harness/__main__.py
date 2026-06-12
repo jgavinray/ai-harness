@@ -11,7 +11,8 @@ def main() -> None:
     parser.add_argument("--config", default="harness.toml", help="path to harness.toml")
     args = parser.parse_args()
     settings = load_settings(args.config)
-    uvicorn.run(create_app(settings), host=settings.server.host, port=settings.server.port)
+    app = create_app(settings, config_path=args.config)
+    uvicorn.run(app, host=settings.server.host, port=settings.server.port)
 
 
 if __name__ == "__main__":

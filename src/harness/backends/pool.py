@@ -93,7 +93,34 @@ def _fleet_from(settings: Settings) -> list[PoolBackendCfg]:
 
 class BackendPool:
     def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+        self.client = client
         self.backends = [PooledBackend(cfg, client) for cfg in _fleet_from(settings)]
+
+    def reconfigure(self, settings: Settings) -> dict:
+        """Diff the new [[backends]] list against the live pool by name.
+
+        Surviving backends are updated in place so their counters, breaker
+        state, and any in-flight requests carry over; in-flight streams on
+        removed backends hold their own reference and finish normally.
+        """
+        by_name = {b.name: b for b in self.backends}
+        summary: dict = {"updated": [], "added": [], "removed": []}
+        rebuilt = []
+        for cfg in _fleet_from(settings):
+            b = by_name.pop(cfg.name, None)
+            if b:
+                b.cfg = cfg
+                b.roles = list(cfg.roles)
+                b.backend = make_backend(cfg, self.client)
+                b.profile = get_profile(cfg.profile)
+                summary["updated"].append(cfg.name)
+            else:
+                b = PooledBackend(cfg, self.client)
+                summary["added"].append(cfg.name)
+            rebuilt.append(b)
+        summary["removed"] = sorted(by_name)
+        self.backends = rebuilt
+        return summary
 
     def get(self, name: str) -> PooledBackend | None:
         return next((b for b in self.backends if b.name == name), None)
