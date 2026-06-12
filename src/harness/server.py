@@ -58,21 +58,40 @@ KV_USAGE_GAUGES = {
 }
 
 
-async def _kv_usage(b, client: httpx.AsyncClient) -> float | None:
+KV_RESIDENT_SESSIONS = 8  # sessions remembered per backend for the estimate
+
+
+async def _kv_usage(b, client: httpx.AsyncClient) -> dict | None:
+    """Live KV occupancy: measured from the engine's gauge when it has one,
+    otherwise (modern llama.cpp dropped its KV metrics) estimated from slot
+    capacity (/slots n_ctx) and the sessions most recently resident here."""
     gauge = KV_USAGE_GAUGES.get(b.cfg.kind)
     if not gauge:
         return None
-    url = b.cfg.base_url.rstrip("/").removesuffix("/v1") + "/metrics"
+    base = b.cfg.base_url.rstrip("/").removesuffix("/v1")
     try:
-        resp = await client.get(url, timeout=2.0)
+        resp = await client.get(base + "/metrics", timeout=2.0)
+        if resp.status_code == 200:
+            for line in resp.text.splitlines():
+                if line.startswith(gauge):
+                    return {"pct": round(float(line.rsplit(None, 1)[-1]) * 100, 1),
+                            "est": False}
+    except (httpx.HTTPError, ValueError):
+        pass
+    if b.cfg.kind != "llamacpp":
+        return None
+    try:
+        resp = await client.get(base + "/slots", timeout=2.0)
         if resp.status_code != 200:
             return None
-        for line in resp.text.splitlines():
-            if line.startswith(gauge):
-                return round(float(line.rsplit(None, 1)[-1]) * 100, 1)
+        slots = resp.json()
+        capacity = sum(s.get("n_ctx") or 0 for s in slots)
+        if not slots or not capacity:
+            return None
+        resident = sum(list(b.kv_resident.values())[-len(slots):])
+        return {"pct": round(100 * min(resident, capacity) / capacity, 1), "est": True}
     except (httpx.HTTPError, ValueError):
         return None
-    return None
 
 
 def _dump(settings: Settings, kind: str, data: dict) -> None:
@@ -128,6 +147,12 @@ def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
             b.cached_tokens += r.get("cached_tokens") or 0
             b.output_tokens += r.get("output_tokens") or 0
             b.recent_cache.append((r.get("input_tokens") or 0, r.get("cached_tokens") or 0))
+            skey = r.get("session_key")
+            if skey and (r.get("input_tokens") or 0):
+                b.kv_resident.pop(skey, None)
+                b.kv_resident[skey] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+                while len(b.kv_resident) > KV_RESIDENT_SESSIONS:
+                    b.kv_resident.pop(next(iter(b.kv_resident)))
             if r.get("ttft_ms") is not None:
                 b.ttft_ms.append(r["ttft_ms"])
     for b in pool.backends:
@@ -248,6 +273,11 @@ def create_app(
                     chosen.output_tokens += ev.output_tokens
                     chosen.recent_cache.append((ev.input_tokens, ev.cached_tokens))
                     del chosen.recent_cache[:-CACHE_WINDOW]
+                    if ev.input_tokens:
+                        chosen.kv_resident.pop(skey, None)
+                        chosen.kv_resident[skey] = ev.input_tokens + ev.output_tokens
+                        while len(chosen.kv_resident) > KV_RESIDENT_SESSIONS:
+                            chosen.kv_resident.pop(next(iter(chosen.kv_resident)))
                 if (cache_key and cached_events is None) or settings.traces.enabled:
                     buffer.append(ev)
                 yield ev
@@ -345,7 +375,8 @@ def create_app(
                 "kv_cache_hit_pct_recent": round(100 * recent_cached / recent_prompt, 1),
                 # fresh prefill + every decoded token = all tokens written to KV
                 "kv_written_tokens": b.prompt_tokens - b.cached_tokens + b.output_tokens,
-                "kv_used_pct": kv_used,
+                "kv_used_pct": kv_used["pct"] if kv_used else None,
+                "kv_used_est": kv_used["est"] if kv_used else False,
             }
         return JSONResponse({
             **stats,

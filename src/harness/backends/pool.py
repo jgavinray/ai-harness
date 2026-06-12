@@ -38,6 +38,9 @@ class PooledBackend:
         self.output_tokens = 0
         self.ttft_ms: list[int] = []
         self.recent_cache: list[tuple[int, int]] = []  # (prompt, cached) per request
+        # session -> tokens of its last request here, insertion-ordered by
+        # recency; basis for the llama.cpp KV-residency estimate
+        self.kv_resident: dict[str, int] = {}
 
     @property
     def model_name(self) -> str:

@@ -58,7 +58,7 @@ async function tick() {
         <td>${b.kv_cache_hit_pct}%</td>
         <td>${b.kv_cache_hit_pct_recent}%</td>
         <td>${fmt(b.kv_written_tokens)}</td>
-        <td>${b.kv_used_pct == null ? "–" : b.kv_used_pct + "%"}</td>
+        <td>${b.kv_used_pct == null ? "–" : (b.kv_used_est ? "~" : "") + b.kv_used_pct + "%"}</td>
       </tr>`).join("");
   } catch (e) {
     document.getElementById("err").textContent = "— stats unreachable";

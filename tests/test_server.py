@@ -331,3 +331,61 @@ async def test_stats_polls_live_kv_usage_from_backend_metrics():
     async with client:
         d = (await client.get("/stats")).json()["backends"]["v"]
     assert d["kv_used_pct"] == 42.0
+
+
+async def test_llamacpp_kv_used_estimated_from_slots_and_sessions(tmp_path):
+    # llama.cpp dropped its KV gauges; estimate residency from slot capacity
+    # and the last request size of the sessions most recently on this backend.
+    from harness.config import PoolBackendCfg
+
+    log = tmp_path / "requests.jsonl"
+    records = [
+        {"backend": "g", "session_key": "sA", "input_tokens": 300,
+         "output_tokens": 50, "cached_tokens": 0, "ttft_ms": 1},
+        {"backend": "g", "session_key": "sB", "input_tokens": 100,
+         "output_tokens": 10, "cached_tokens": 0, "ttft_ms": 1},
+        # sA's later turn supersedes its earlier residency
+        {"backend": "g", "session_key": "sA", "input_tokens": 400,
+         "output_tokens": 0, "cached_tokens": 0, "ttft_ms": 1},
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    fake = FakeOpenAI()
+    fake.slots = [{"id": 0, "n_ctx": 1000}, {"id": 1, "n_ctx": 1000}]
+    settings = Settings()
+    settings.log.requests_path = str(log)
+    settings.backends = [
+        PoolBackendCfg(name="g", kind="llamacpp", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["g"]
+    # resident = sA 400 + sB 110 = 510 of 2000 cells
+    assert d["kv_used_pct"] == 25.5
+    assert d["kv_used_est"] is True
+
+
+async def test_vllm_kv_used_is_measured_not_estimated():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = 'vllm:kv_cache_usage_perc{engine="0"} 0.42\n'
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["v"]
+    assert d["kv_used_pct"] == 42.0
+    assert d["kv_used_est"] is False
