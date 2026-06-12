@@ -79,7 +79,13 @@ class HistoryStage:
         if count_conversation(conv, self.counter) <= target:
             return conv
 
-        # pass 2: evict turn-groups from the front
+        # pass 2: evict turn-groups from the front, but never the anchor —
+        # the opening user turn that states the task.
+        anchor: tuple[Turn, ...] = ()
+        if head and head[0].role == "user" and any(
+            isinstance(p, TextPart) for p in head[0].parts
+        ):
+            anchor, head = head[:1], head[1:]
         groups = _groups(head)
         evicted = False
         while groups and count_conversation(conv, self.counter) > target:
@@ -87,5 +93,5 @@ class HistoryStage:
             evicted = True
             kept = tuple(t for g in groups for t in g)
             marker = (EVICT_MARKER,) if evicted else ()
-            conv = replace(conv, turns=marker + kept + tail)
+            conv = replace(conv, turns=anchor + marker + kept + tail)
         return conv

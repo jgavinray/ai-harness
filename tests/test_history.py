@@ -75,3 +75,14 @@ def test_eviction_keeps_pairing():
         for p in t.parts
     )
     assert len(out.turns) < len(conv.turns)
+
+
+def test_eviction_pins_first_user_turn():
+    # The opening user turn carries the task; ghost-task behavior returns if
+    # it is ever evicted. It must survive any amount of compaction.
+    conv = big_session(20, 8000)
+    out = HistoryStage().apply(conv, small_settings(4000))
+    first_texts = [
+        p.text for p in out.turns[0].parts if isinstance(p, TextPart)
+    ] + [p.text for p in out.turns[1].parts if isinstance(p, TextPart)]
+    assert any("fix the bug" in t for t in first_texts)
