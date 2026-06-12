@@ -53,6 +53,27 @@ def test_compress_squeezes_whitespace():
     assert "line1" in out.system and "line2" in out.system
 
 
+def test_replace_mode_frames_kept_context_as_stale_background():
+    system = CC_SYSTEM + (
+        "\n# memory\nLast session: investigating weather damage in fight.c "
+        "at /Users/old/dev-pr. Change committed.\n"
+    )
+    out = SystemPromptStage().apply(conv_with(system), settings("replace"))
+    # framing block present, after the contract but before every kept section
+    framing_at = out.system.find("may be stale")
+    assert framing_at != -1
+    assert "the only task" in out.system
+    assert out.system.find("old_string") < framing_at
+    assert framing_at < out.system.find("Working directory: /home/user/project")
+    assert framing_at < out.system.find("Last session: investigating weather damage")
+
+
+def test_replace_mode_no_framing_when_nothing_kept():
+    bare = "You are Claude Code, Anthropic's official CLI for Claude.\n\n# Tone and style\nBe concise.\n"
+    out = SystemPromptStage().apply(conv_with(bare), settings("replace"))
+    assert "may be stale" not in out.system
+
+
 def test_sdk_print_mode_prompt_also_replaced():
     sdk_system = (
         "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n\n"
