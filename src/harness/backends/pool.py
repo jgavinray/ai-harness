@@ -35,7 +35,9 @@ class PooledBackend:
         self.errors = 0
         self.cached_tokens = 0
         self.prompt_tokens = 0
+        self.output_tokens = 0
         self.ttft_ms: list[int] = []
+        self.recent_cache: list[tuple[int, int]] = []  # (prompt, cached) per request
 
     @property
     def model_name(self) -> str:

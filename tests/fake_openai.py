@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 
 class FakeOpenAI:
@@ -20,7 +20,15 @@ class FakeOpenAI:
         self.app = FastAPI()
         self.scripts: list[list[dict]] = []
         self.requests: list[dict] = []
+        self.metrics_text: str | None = None  # set to expose a /metrics endpoint
         self.app.post("/v1/chat/completions")(self.handler)
+        self.app.get("/metrics")(self.metrics)
+
+    async def metrics(self):
+        if self.metrics_text is None:
+            # mirrors llama.cpp without --metrics
+            return PlainTextResponse("not enabled", status_code=501)
+        return PlainTextResponse(self.metrics_text)
 
     def push(self, script: list[dict]) -> None:
         self.scripts.append(script)

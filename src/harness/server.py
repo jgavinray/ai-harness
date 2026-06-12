@@ -48,6 +48,31 @@ STAGES = [
     FewshotStage(),
 ]
 TTFT_WINDOW = 500
+CACHE_WINDOW = 100  # requests in the rolling kv-hit window
+
+# Prometheus gauge (0..1) for live KV pool occupancy, per backend kind.
+# llama.cpp only serves /metrics when launched with --metrics.
+KV_USAGE_GAUGES = {
+    "vllm": "vllm:kv_cache_usage_perc",
+    "llamacpp": "llamacpp:kv_cache_usage_ratio",
+}
+
+
+async def _kv_usage(b, client: httpx.AsyncClient) -> float | None:
+    gauge = KV_USAGE_GAUGES.get(b.cfg.kind)
+    if not gauge:
+        return None
+    url = b.cfg.base_url.rstrip("/").removesuffix("/v1") + "/metrics"
+    try:
+        resp = await client.get(url, timeout=2.0)
+        if resp.status_code != 200:
+            return None
+        for line in resp.text.splitlines():
+            if line.startswith(gauge):
+                return round(float(line.rsplit(None, 1)[-1]) * 100, 1)
+    except (httpx.HTTPError, ValueError):
+        return None
+    return None
 
 
 def _dump(settings: Settings, kind: str, data: dict) -> None:
@@ -101,10 +126,13 @@ def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
                 b.errors += 1
             b.prompt_tokens += r.get("input_tokens") or 0
             b.cached_tokens += r.get("cached_tokens") or 0
+            b.output_tokens += r.get("output_tokens") or 0
+            b.recent_cache.append((r.get("input_tokens") or 0, r.get("cached_tokens") or 0))
             if r.get("ttft_ms") is not None:
                 b.ttft_ms.append(r["ttft_ms"])
     for b in pool.backends:
         del b.ttft_ms[:-TTFT_WINDOW]
+        del b.recent_cache[:-CACHE_WINDOW]
 
 
 def create_app(
@@ -217,6 +245,9 @@ def create_app(
                     stats["cached_tokens"] += ev.cached_tokens
                     chosen.prompt_tokens += ev.input_tokens
                     chosen.cached_tokens += ev.cached_tokens
+                    chosen.output_tokens += ev.output_tokens
+                    chosen.recent_cache.append((ev.input_tokens, ev.cached_tokens))
+                    del chosen.recent_cache[:-CACHE_WINDOW]
                 if (cache_key and cached_events is None) or settings.traces.enabled:
                     buffer.append(ev)
                 yield ev
@@ -295,9 +326,12 @@ def create_app(
 
     @app.get("/stats")
     async def get_stats():
+        usages = await asyncio.gather(*(_kv_usage(b, client) for b in pool.backends))
         backends = {}
-        for b in pool.backends:
+        for b, kv_used in zip(pool.backends, usages):
             total_prompt = b.prompt_tokens or 1
+            recent_prompt = sum(p for p, _ in b.recent_cache) or 1
+            recent_cached = sum(c for _, c in b.recent_cache)
             backends[b.name] = {
                 "model": b.model_name,
                 "roles": b.roles,
@@ -308,8 +342,10 @@ def create_app(
                 "ttft_p50_ms": _percentile(b.ttft_ms, 0.50),
                 "ttft_p95_ms": _percentile(b.ttft_ms, 0.95),
                 "kv_cache_hit_pct": round(100 * b.cached_tokens / total_prompt, 1),
-                # prefill tokens computed fresh = tokens written into KV cache
-                "kv_written_tokens": b.prompt_tokens - b.cached_tokens,
+                "kv_cache_hit_pct_recent": round(100 * recent_cached / recent_prompt, 1),
+                # fresh prefill + every decoded token = all tokens written to KV
+                "kv_written_tokens": b.prompt_tokens - b.cached_tokens + b.output_tokens,
+                "kv_used_pct": kv_used,
             }
         return JSONResponse({
             **stats,

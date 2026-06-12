@@ -284,4 +284,50 @@ async def test_stats_rehydrated_from_request_log(tmp_path):
     assert d["requests"] == 2  # cache hit excluded, ghost unknown
     assert d["errors"] == 1
     assert d["kv_cache_hit_pct"] == 20.0  # 40 cached / 200 prompt
-    assert d["kv_written_tokens"] == 160  # 200 prompt - 40 cached
+    assert d["kv_written_tokens"] == 180  # (200-40) prefill + 20 decode
+    assert d["kv_cache_hit_pct_recent"] == 20.0  # window == full history here
+    assert d["kv_used_pct"] is None  # openai-kind backend exposes no gauge
+
+
+async def test_recent_cache_hit_window_reflects_current_behavior(tmp_path):
+    # 5 old perfect-hit records pushed out of the recent window by 100 misses:
+    # lifetime pct stays diluted, recent pct tells the truth about now.
+    log = tmp_path / "requests.jsonl"
+    old = [{"backend": "default", "input_tokens": 100, "output_tokens": 0,
+            "cached_tokens": 100, "ttft_ms": 1}] * 5
+    new = [{"backend": "default", "input_tokens": 100, "output_tokens": 0,
+            "cached_tokens": 0, "ttft_ms": 1}] * 100
+    log.write_text("\n".join(json.dumps(r) for r in old + new) + "\n")
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.log.requests_path = str(log)
+    fake = FakeOpenAI()
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["default"]
+    assert d["kv_cache_hit_pct"] == 4.8  # 500 / 10500 lifetime
+    assert d["kv_cache_hit_pct_recent"] == 0.0  # last 100 requests
+
+
+async def test_stats_polls_live_kv_usage_from_backend_metrics():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = 'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42\n'
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["v"]
+    assert d["kv_used_pct"] == 42.0
