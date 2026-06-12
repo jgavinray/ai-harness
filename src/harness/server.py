@@ -36,7 +36,7 @@ from harness.pipeline.history import HistoryStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
-from harness.router import Router, session_key
+from harness.router import Router, request_role, session_key
 from harness.tokens.counter import HeuristicCounter, count_conversation
 from harness.traces import TraceStore
 
@@ -223,7 +223,7 @@ def create_app(
         req_settings.profile.context_window = chosen.cfg.context_window
         conv = run_pipeline(conv, req_settings, stages)
         skey = session_key(body)
-        role = "fast" if "haiku" in (body.get("model") or "") else "main"
+        role = request_role(body)
         rendered = chosen.profile.render(conv, chosen.model_name)
         _dump(settings, "rendered-payload", rendered)
 

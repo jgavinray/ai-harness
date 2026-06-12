@@ -158,3 +158,37 @@ def test_reconfigure_adds_and_removes_backends():
     assert [b.name for b in pool.backends] == ["big", "new"]
     assert summary["added"] == ["new"]
     assert summary["removed"] == ["gem", "mid"]
+
+
+def test_request_role_main_cli():
+    from harness.router import request_role
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude."}
+    assert request_role(body) == "main"
+
+
+def test_request_role_subagent_sdk():
+    from harness.router import request_role
+    body = {"model": "claude-opus-4-8",
+            "system": [{"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."}]}
+    assert request_role(body) == "subagent"
+
+
+def test_request_role_haiku_fast():
+    from harness.router import request_role
+    assert request_role({"model": "claude-haiku-4-5"}) == "fast"
+
+
+def test_request_role_unknown_defaults_main():
+    from harness.router import request_role
+    assert request_role({"model": "claude-opus-4-8", "system": "custom"}) == "main"
+
+
+def test_router_routes_subagent_fingerprint_to_subagent_backend():
+    pool = make_pool(fleet_settings())
+    router = Router(pool, fleet_settings())
+    body = {"model": "claude-opus-4-8",
+            "system": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+            "messages": [{"role": "user", "content": "explore"}]}
+    chosen = router.pick(body)
+    assert chosen.name in ("mid", "gem")  # the subagent-role backends

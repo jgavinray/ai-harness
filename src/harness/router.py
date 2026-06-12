@@ -42,6 +42,23 @@ def session_key(body: dict) -> str:
     return hashlib.sha1(basis.encode()).hexdigest()
 
 
+MAIN_FINGERPRINT = "You are Claude Code, Anthropic's official CLI"
+SUBAGENT_MARKERS = ("Claude Agent SDK", "You are an agent for Claude Code")
+
+
+def request_role(body: dict) -> str:
+    """fast: haiku-class. subagent: Task/SDK agent fingerprints.
+    main: the interactive CLI loop, and the safe default for unknowns."""
+    if "haiku" in (body.get("model") or ""):
+        return "fast"
+    system = _flatten(body.get("system") or "")[:KEY_BASIS_CHARS]
+    if MAIN_FINGERPRINT in system:
+        return "main"
+    if any(marker in system for marker in SUBAGENT_MARKERS):
+        return "subagent"
+    return "main"
+
+
 class Router:
     def __init__(self, pool: BackendPool, settings: Settings) -> None:
         self.pool = pool
@@ -58,12 +75,14 @@ class Router:
                 self.affinity[key] = (name, time.time())
                 return backend
 
-        role = "fast" if "haiku" in (body.get("model") or "") else "main"
+        role = request_role(body)
         candidates = self.pool.with_role(role)
-        if role == "main":
-            # overflow: if every main backend is busy (or none up), widen to subagent
+        if role in ("main", "subagent"):
+            # overflow: if every backend for the role is busy (or none up),
+            # widen to the other agentic role
+            other = "subagent" if role == "main" else "main"
             if not candidates or min(b.in_flight for b in candidates) > 0:
-                candidates = candidates + self.pool.with_role("subagent")
+                candidates = candidates + self.pool.with_role(other)
         if not candidates:
             # everything for the role is down; last resort = any backend at all
             candidates = [b for b in self.pool.backends if not b.is_down()] or self.pool.backends
