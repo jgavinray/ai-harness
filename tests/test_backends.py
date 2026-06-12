@@ -21,7 +21,7 @@ def make(fake: FakeOpenAI, kind: str = "openai"):
 async def test_stream_yields_chunks():
     fake = FakeOpenAI()
     fake.push([text_chunk("hi"), finish_chunk()])
-    chunks = [c async for c in make(fake).stream({"model": "m", "messages": []})]
+    chunks = [c async for c in make(fake).stream({"model": "m", "messages": [], "stream": True})]
     assert chunks[0]["choices"][0]["delta"]["content"] == "hi"
     assert chunks[-1]["usage"]["prompt_tokens"] == 10
     assert fake.requests[0]["model"] == "m"
@@ -31,14 +31,14 @@ async def test_http_error_raises():
     fake = FakeOpenAI()
     fake.push([{"_status": 500}])
     with pytest.raises(BackendError):
-        [c async for c in make(fake).stream({"model": "m", "messages": []})]
+        [c async for c in make(fake).stream({"model": "m", "messages": [], "stream": True})]
 
 
 async def test_midstream_death_raises():
     fake = FakeOpenAI()
     fake.push([text_chunk("partial"), {"_die_midstream": True}])
     with pytest.raises(BackendError):
-        async for _ in make(fake).stream({"model": "m", "messages": []}):
+        async for _ in make(fake).stream({"model": "m", "messages": [], "stream": True}):
             pass
 
 

@@ -114,13 +114,13 @@ async def test_pool_marks_down_on_error_and_recovers():
     pool = BackendPool(s, client)
     b = pool.backends[0]
     with pytest.raises(BackendError):
-        async for _ in pool.stream(b, {"model": "m", "messages": []}):
+        async for _ in pool.stream(b, {"model": "m", "messages": [], "stream": True}):
             pass
     assert b.is_down() is True
     b.cooldown_until = 0  # simulate cooldown expiry
     fake.scripts.clear()
     fake.push([text_chunk("hi"), finish_chunk()])
-    chunks = [c async for c in pool.stream(b, {"model": "m", "messages": []})]
+    chunks = [c async for c in pool.stream(b, {"model": "m", "messages": [], "stream": True})]
     assert chunks and b.is_down() is False
 
 

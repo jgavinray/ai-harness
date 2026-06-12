@@ -161,3 +161,15 @@ def test_registry():
         assert get_profile(name).name == name
     with pytest.raises(ValueError):
         get_profile("gpt99")
+
+
+def test_render_streams_from_backend_even_for_nonstream_client():
+    from dataclasses import replace
+
+    c = conv()
+    c = replace(c, params=GenParams(max_tokens=2048, stream=False))
+    payload = get_profile("qwen").render(c, "m")
+    # the harness always streams from the backend (and collects for the
+    # client); otherwise plain-JSON replies yield no events and no usage
+    assert payload["stream"] is True
+    assert payload["stream_options"] == {"include_usage": True}

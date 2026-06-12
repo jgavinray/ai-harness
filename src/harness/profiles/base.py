@@ -125,10 +125,13 @@ class Profile:
             "model": model,
             "messages": messages,
             "max_tokens": conv.params.max_tokens,
-            "stream": conv.params.stream,
+            # Always stream from the backend regardless of what the client
+            # asked for: the SSE parser is the only response path, and plain
+            # JSON replies would yield no events and drop usage entirely.
+            # The server collects events for non-streaming clients.
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
-        if conv.params.stream:
-            payload["stream_options"] = {"include_usage": True}
         if conv.params.temperature is not None:
             payload["temperature"] = conv.params.temperature
         if conv.params.stop_sequences:

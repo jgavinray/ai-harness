@@ -123,6 +123,9 @@ async def test_non_streaming():
     assert body["type"] == "message"
     assert body["content"][0] == {"type": "text", "text": "done"}
     assert body["stop_reason"] == "end_turn"
+    # usage must survive even though the client didn't stream
+    assert body["usage"]["input_tokens"] == 10
+    assert body["usage"]["output_tokens"] == 5
 
 
 async def test_count_tokens_no_backend_call():

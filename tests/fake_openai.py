@@ -32,6 +32,23 @@ class FakeOpenAI:
         if script and script[0].get("_status"):
             return JSONResponse({"error": "scripted failure"}, status_code=script[0]["_status"])
 
+        if not body.get("stream"):
+            # real servers answer stream=false with one JSON completion, not SSE
+            text, finish, usage = "", "stop", {}
+            for chunk in script:
+                for choice in chunk.get("choices", []):
+                    text += (choice.get("delta") or {}).get("content") or ""
+                    finish = choice.get("finish_reason") or finish
+                usage = chunk.get("usage") or usage
+            return JSONResponse({
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": finish,
+                }],
+                "usage": usage,
+            })
+
         def gen():
             for chunk in script:
                 if chunk.get("_die_midstream"):
