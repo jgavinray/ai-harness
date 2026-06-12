@@ -124,5 +124,10 @@ class Router:
             candidates,
             key=lambda b: (b.in_flight, "fast" in b.roles, b.requests),
         )
-        self.affinity[key] = (chosen.name, time.time())
+        # Overflow and degraded placements are temporary: recording them as
+        # affinity would pin the session (and, once large, pin it forever via
+        # the sticky rule) to a backend that never held its KV prefix. Only a
+        # role-correct backend may become the session's home.
+        if role in chosen.roles:
+            self.affinity[key] = (chosen.name, time.time())
         return chosen

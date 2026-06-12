@@ -266,6 +266,23 @@ def test_main_overflow_prefers_non_fast_backend():
     assert router.pick(body).name == "gem"
 
 
+def test_overflow_does_not_steal_affinity():
+    # A small-context request may overflow while its warm backend is
+    # saturated, but the overflow target must not capture the session's
+    # affinity: the session has to return to its KV-warm backend as soon
+    # as capacity frees, not stay pinned to wherever overflow dumped it.
+    pool = make_pool(capped_settings())
+    router = Router(pool, capped_settings())
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [{"role": "user", "content": "small task"}]}
+    assert router.pick(body).name == "big"   # affinity established
+    pool.get("big").in_flight = 1            # saturated
+    assert router.pick(body).name != "big"   # overflows elsewhere
+    pool.get("big").in_flight = 0            # capacity frees
+    assert router.pick(body).name == "big"   # returns to the warm backend
+
+
 def test_affinity_sticky_for_large_context_despite_capacity():
     # Re-prefilling a large context cold (40-120s observed) is far worse
     # than briefly queuing on the warm backend; big sessions never bounce.
