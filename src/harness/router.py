@@ -16,6 +16,10 @@ from harness.config import Settings
 
 AFFINITY_TTL_S = 3600.0
 KEY_BASIS_CHARS = 2048
+# Above this estimated context size, a session never leaves its KV-warm
+# backend for capacity reasons: a cold re-prefill (40-120s observed at 75k
+# tokens) costs far more than briefly queuing on the warm slot.
+STICKY_CONTEXT_TOKENS = 8192
 
 
 # Claude Code prepends a per-request billing block; its content varies between
@@ -56,6 +60,14 @@ MAIN_FINGERPRINT = "You are Claude Code, Anthropic's official CLI"
 SUBAGENT_MARKERS = ("Claude Agent SDK", "You are an agent for Claude Code")
 
 
+def _est_context_tokens(body: dict) -> int:
+    """Cheap size estimate for the bounce-or-stick decision; ~4 chars/token."""
+    total = 0
+    for msg in body.get("messages") or []:
+        total += len(str(msg.get("content")))
+    return total // 4
+
+
 def request_role(body: dict) -> str:
     """fast: haiku-class. subagent: Task/SDK agent fingerprints.
     main: the interactive CLI loop, and the safe default for unknowns."""
@@ -81,10 +93,11 @@ class Router:
         if hit:
             name, ts = hit
             backend = self.pool.get(name)
+            sticky = _est_context_tokens(body) > STICKY_CONTEXT_TOKENS
             if (
                 backend
                 and not backend.is_down()
-                and not backend.at_capacity  # a stalled box beats a cold KV prefix
+                and (sticky or not backend.at_capacity)
                 and time.time() - ts < AFFINITY_TTL_S
             ):
                 self.affinity[key] = (name, time.time())
