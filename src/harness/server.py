@@ -117,9 +117,12 @@ def create_app(settings: Settings, backend_client: httpx.AsyncClient | None = No
             return invalid_request(f"could not decode request: {exc!r}")
 
         _dump(settings, "anthropic-request", body)
-        conv = run_pipeline(conv, settings, stages)
-
         chosen = router.pick(body)
+        # The compaction budget depends on which backend serves the request,
+        # so route first and pipeline against that backend's context window.
+        req_settings = settings.model_copy(deep=True)
+        req_settings.profile.context_window = chosen.cfg.context_window
+        conv = run_pipeline(conv, req_settings, stages)
         skey = session_key(body)
         role = "fast" if "haiku" in (body.get("model") or "") else "main"
         rendered = chosen.profile.render(conv, chosen.model_name)

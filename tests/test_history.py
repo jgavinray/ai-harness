@@ -32,6 +32,18 @@ def test_under_budget_identity():
     assert out is conv
 
 
+def test_oversized_max_tokens_does_not_evict_everything():
+    # Claude Code sends max_tokens (e.g. 64000) larger than small context
+    # windows; the budget must floor at a sane minimum instead of going
+    # negative and evicting the entire conversation including the task.
+    from dataclasses import replace
+
+    conv = big_session(4, 100)
+    conv = replace(conv, params=GenParams(max_tokens=64000))
+    out = HistoryStage().apply(conv, small_settings(32768))
+    assert out is conv
+
+
 def test_old_results_truncated_recent_protected():
     conv = big_session()
     s = small_settings(16000)

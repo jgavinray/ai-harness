@@ -61,7 +61,11 @@ class HistoryStage:
         self.counter = HeuristicCounter()
 
     def apply(self, conv: Conversation, settings: Settings) -> Conversation:
-        budget = settings.profile.context_window - conv.params.max_tokens - MARGIN
+        cw = settings.profile.context_window
+        # Clients may request max_tokens larger than a small window; reserve
+        # at most half the window for output so the budget never goes negative
+        # (a negative budget evicts the whole conversation, task included).
+        budget = cw - min(conv.params.max_tokens, cw // 2) - MARGIN
         if count_conversation(conv, self.counter) <= budget:
             return conv
         target = budget * TARGET_RATIO

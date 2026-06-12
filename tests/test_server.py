@@ -69,6 +69,51 @@ async def test_streaming_round_trip():
     assert md["delta"]["stop_reason"] == "tool_use"
 
 
+async def test_history_budget_uses_routed_backend_window():
+    # Fleet mode: the compaction budget must come from the routed backend's
+    # context_window, not the global single-backend profile default.
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(
+            name="big",
+            base_url="http://fake/v1",
+            model="m",
+            context_window=131072,
+            roles=["main", "subagent", "fast"],
+        )
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    body = request_body(stream=False)
+    body["max_tokens"] = 64000
+    # ~25k tokens of history: over budget if the 32768 default window is
+    # used, comfortably under budget for the configured 131072 window.
+    filler = "x " * 25000
+    body["messages"] = [
+        {"role": "user", "content": "the real task: explain fireshield"},
+        {"role": "assistant", "content": filler},
+        {"role": "user", "content": "go on"},
+        {"role": "assistant", "content": "step two"},
+        {"role": "user", "content": "go on"},
+        {"role": "assistant", "content": "step three"},
+        {"role": "user", "content": "finish up"},
+    ]
+    async with client:
+        resp = await client.post("/v1/messages", json=body)
+    assert resp.status_code == 200
+    sent = json.dumps(fake.requests[-1])
+    assert "the real task: explain fireshield" in sent
+    assert "elided by harness" not in sent
+
+
 async def test_non_streaming():
     fake = FakeOpenAI()
     fake.push([text_chunk("done"), finish_chunk("stop")])
