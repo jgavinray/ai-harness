@@ -33,6 +33,7 @@ def aggregate(rows: list[dict]) -> dict[tuple[str, str], dict]:
             "retries_per_session": sum(r.get("retries", 0) for r in rs) / n,
             "tool_surfaced_per_session": sum(r.get("tool_surfaced", 0) for r in rs) / n,
             "guard_fires_per_session": sum(r.get("guard_fires", 0) for r in rs) / n,
+            "plan_drift_per_session": sum(r.get("plan_drift", 0) for r in rs) / n,
             "tokens_per_session": sum(r.get("input_tokens", 0) + r.get("output_tokens", 0) for r in rs) / n,
             "wall_s_per_session": sum(r.get("session_wall_s", 0) for r in rs) / n,
         }
@@ -43,6 +44,7 @@ def markdown(agg: dict[tuple[str, str], dict]) -> str:
     cols = ["trials", "success_rate", "timeout_rate", "malformed_call_rate",
             "post_repair_invalid_rate", "retries_per_session",
             "tool_surfaced_per_session", "guard_fires_per_session",
+            "plan_drift_per_session",
             "tokens_per_session", "wall_s_per_session"]
     lines = [
         "# Efficacy report",

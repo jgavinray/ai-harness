@@ -30,6 +30,7 @@ from harness.config import Settings, load_settings
 from harness.ir import Done
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage
+from harness.planning import PlanningManager
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -177,6 +178,7 @@ def create_app(
     counter = HeuristicCounter()
     logger = RequestLogger(settings.log.requests_path)
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
+    planner = PlanningManager(settings)
 
     async def fast_complete(messages: list[dict]) -> str:
         candidates = pool.with_role("fast") or pool.backends
@@ -245,6 +247,16 @@ def create_app(
             "ttft_ms": None,
         }
         start = time.monotonic()
+        if role == "main":
+            metrics.setdefault("plan_drift", 0)
+            try:
+                await planner.ensure(skey, conv, pool, metrics)
+                conv = planner.inject(skey, conv)
+                rendered = chosen.profile.render(conv, chosen.model_name)
+                _dump(settings, "rendered-payload", rendered)
+            except BackendError as exc:
+                metrics["plan_error"] = str(exc)
+                metrics.setdefault("plan_drift", 0)
 
         cacheable = settings.cache.enabled and role in settings.cache.roles
         cache_key = payload_key(rendered) if cacheable else None

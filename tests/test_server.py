@@ -202,6 +202,41 @@ async def test_pipeline_applied_end_to_end():
     assert len(sent["tools"]) <= 8
 
 
+async def test_planning_scaffold_generated_once_and_injected():
+    fake = FakeOpenAI()
+    fake.push([
+        text_chunk("1. Inspect the failing test\n2. Patch the implementation\n3. Run the tests"),
+        finish_chunk("stop"),
+    ])
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    fake.push([text_chunk("ok again"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.planning.enabled = True
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    async with client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        assert resp.status_code == 200
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        assert resp.status_code == 200
+
+    assert len(fake.requests) == 3
+    assert "Write a concrete execution plan" in fake.requests[0]["messages"][0]["content"]
+    first_exec = fake.requests[1]["messages"][0]["content"]
+    second_exec = fake.requests[2]["messages"][0]["content"]
+    assert "## Execution plan" in first_exec
+    assert "1. Inspect the failing test" in first_exec
+    assert "Plan status: Step 1/3" in first_exec
+    assert "## Execution plan" in second_exec
+    assert "Write a concrete execution plan" not in json.dumps(fake.requests[2])
+
+
 def _fleet_toml(roles: str) -> str:
     return (
         '[[backends]]\nname = "alpha"\nbase_url = "http://fake/v1"\n'

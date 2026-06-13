@@ -31,6 +31,11 @@ guard_verify_after_edit = true
 dump_prompts = false
 dump_dir = "debug_dumps"
 
+[planning]
+enabled = false             # opt in: generate one plan per main session via a plan-role backend
+max_steps = 8
+max_chars = 4000
+
 # ---- fleet mode (preferred): one [[backends]] block per server ----
 # [[backends]]
 # name = "big"

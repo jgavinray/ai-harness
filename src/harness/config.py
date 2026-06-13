@@ -69,6 +69,12 @@ class MemoryCfg(BaseModel):
     max_chars: int = 4000  # ~1k tokens of injected memory
 
 
+class PlanningCfg(BaseModel):
+    enabled: bool = False
+    max_steps: int = 8
+    max_chars: int = 4000
+
+
 class CacheCfg(BaseModel):
     enabled: bool = True
     ttl_s: float = 600.0
@@ -87,6 +93,7 @@ class Settings(BaseModel):
     cache: CacheCfg = CacheCfg()
     traces: TracesCfg = TracesCfg()
     memory: MemoryCfg = MemoryCfg()
+    planning: PlanningCfg = PlanningCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

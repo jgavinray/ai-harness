@@ -12,7 +12,7 @@ never execute a stale plan without re-reading the files it names.**
 | 1 | Tool autonomy (①) | `2026-06-12-tool-autonomy.md` | **done 2026-06-12** (b47a2fb..9c35752, 162 tests green) |
 | 2 | Eval expansion | `2026-06-12-eval-expansion.md` | **done 2026-06-12** |
 | 3 | Workflow guards (⑥) | `2026-06-12-workflow-guards.md` | **done 2026-06-12** |
-| 4 | Planning scaffold (④) | `(to write)` | — |
+| 4 | Planning scaffold (④) | `2026-06-12-planning-scaffold.md` | **done 2026-06-13** |
 | 5 | Project memory (⑤) | `(to write)` | — |
 | 6 | Skill compiler (②) | `(to write)` | — |
 | 7 | Capability routing + OCR fallback (⑧) | `(to write)` | — |
