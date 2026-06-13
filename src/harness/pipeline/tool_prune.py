@@ -1,7 +1,7 @@
 """Stage ②: prune the tool list so small models see at most max_tools.
 
-Priority: tools called in the protected recent-turn window, then the core
-set, then everything else.
+Priority: tools called anywhere in history (sticky, first-call order, for
+KV-prefix stability), then the core set, then everything else.
 """
 
 from __future__ import annotations
@@ -19,15 +19,15 @@ class ToolPruneStage:
         if not settings.pipeline.tool_prune or not conv.tools:
             return conv
 
-        recent = []
-        for turn in conv.turns[-settings.pipeline.recent_turns_protected:]:
+        called: list[str] = []
+        for turn in conv.turns:
             for part in turn.parts:
-                if isinstance(part, ToolCallPart) and part.name not in recent:
-                    recent.append(part.name)
+                if isinstance(part, ToolCallPart) and part.name not in called:
+                    called.append(part.name)
 
         by_name = {t.name: t for t in conv.tools}
         keep: list[str] = []
-        for name in (*recent, *CORE, *by_name):
+        for name in (*called, *CORE, *by_name):
             if name in by_name and name not in keep:
                 keep.append(name)
             if len(keep) >= settings.pipeline.max_tools:

@@ -34,12 +34,32 @@ def test_recently_used_extra_kept():
     assert len(names) <= Settings().pipeline.max_tools
 
 
-def test_old_usage_not_kept():
+def test_old_usage_stays_surfaced():
+    # Once a tool is called it must stay surfaced for the whole session:
+    # dropping it later changes the rendered tool list, which rewrites the
+    # prompt prefix and forces a full KV re-prefill (20-60s at 60k tokens).
     s = Settings()
     old = (Turn("assistant", (ToolCallPart("t1", "WebFetch", {"url": "u"}),)),)
-    filler = tuple(Turn("user", (TextPart(f"msg {i}"),)) for i in range(s.pipeline.recent_turns_protected + 1))
+    filler = tuple(
+        Turn("user", (TextPart(f"msg {i}"),))
+        for i in range(s.pipeline.recent_turns_protected + 1)
+    )
     out = ToolPruneStage().apply(conv(old + filler), s)
-    assert "WebFetch" not in {t.name for t in out.tools}
+    assert "WebFetch" in {t.name for t in out.tools}
+
+
+def test_called_tools_keep_first_call_order():
+    # First-call order is append-mostly: new calls extend the list at a
+    # stable position instead of reshuffling it.
+    turns = (
+        Turn("assistant", (ToolCallPart("t1", "NotebookEdit", {}),)),
+        Turn("user", (TextPart("ok"),)),
+        Turn("assistant", (ToolCallPart("t2", "WebFetch", {"url": "u"}),)),
+        Turn("user", (TextPart("ok"),)),
+    )
+    out = ToolPruneStage().apply(conv(turns), Settings())
+    names = [t.name for t in out.tools]
+    assert names.index("NotebookEdit") < names.index("WebFetch")
 
 
 def test_toggle_off_identity():
