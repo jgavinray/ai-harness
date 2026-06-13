@@ -14,6 +14,8 @@ and reporting for the counters future guards/scaffolds need.
   from the initial repo state and checks the full end state.
 - [x] Add `tool_catalog` to the generated eval config matrix so `full`,
   `baseline`, and `ablate-tool_catalog` measure catalog impact.
+- [x] Add first-class eval ablations for workflow guards, planning, memory,
+  skills, and research so every scaffolded capability can prove its own delta.
 - [x] Include `WebFetch` in eval `--allowedTools` so the Claude Code client can
   expose a non-CORE tool for the discovery task.
 - [x] Aggregate `tool_surfaced` and `guard_fires` in eval results and render

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-STAGES = {
+PIPELINE_STAGES = {
     "system_prompt": ('system_prompt = "replace"', 'system_prompt = "passthrough"'),
     "tool_prune": ("tool_prune = true", "tool_prune = false"),
     "tool_catalog": ("tool_catalog = true", "tool_catalog = false"),
     "fewshot": ("fewshot = true", "fewshot = false"),
     "repair": ("repair_retries = 2", "repair_retries = 0"),
+    "workflow_guards": ("workflow_guards = true", "workflow_guards = false"),
 }
+
+SECTION_STAGES = ("planning", "memory", "skills", "research")
+STAGES = tuple(PIPELINE_STAGES) + SECTION_STAGES
 
 
 def render(
@@ -22,7 +26,9 @@ def render(
     log_path: str,
     overrides: dict[str, bool],
     traces_dir: str | None = None,
+    state_dir: str | None = None,
 ) -> str:
+    state = Path(state_dir or Path(log_path).parent)
     lines = [
         "[server]",
         f"port = {port}",
@@ -37,9 +43,30 @@ def render(
         "",
         "[pipeline]",
     ]
-    for stage, (on, off) in STAGES.items():
+    for stage, (on, off) in PIPELINE_STAGES.items():
         lines.append(on if overrides.get(stage, True) else off)
-    lines += ["", "[log]", f'requests_path = "{log_path}"']
+    lines += [
+        "",
+        "[planning]",
+        f"enabled = {str(overrides.get('planning', True)).lower()}",
+        "",
+        "[memory]",
+        f"enabled = {str(overrides.get('memory', True)).lower()}",
+        f'dir = "{state / "memory"}"',
+        "idle_s = 0.0",
+        "",
+        "[skills]",
+        f"enabled = {str(overrides.get('skills', True)).lower()}",
+        'dir = "~/.codex/skills"',
+        f'cache_dir = "{state / "compiled-skills"}"',
+        "",
+        "[research]",
+        f"enabled = {str(overrides.get('research', True)).lower()}",
+        f'cache_dir = "{state / "research"}"',
+        "",
+        "[log]",
+        f'requests_path = "{log_path}"',
+    ]
     if traces_dir:
         lines += ["", "[traces]", "enabled = true", f'dir = "{traces_dir}"']
     return "\n".join(lines) + "\n"

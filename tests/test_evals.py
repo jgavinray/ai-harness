@@ -17,6 +17,11 @@ def test_config_matrix():
     assert m["ablate-fewshot"]["fewshot"] is False
     assert m["ablate-fewshot"]["tool_prune"] is True
     assert m["ablate-tool_catalog"]["tool_catalog"] is False
+    assert m["ablate-workflow_guards"]["workflow_guards"] is False
+    assert m["ablate-planning"]["planning"] is False
+    assert m["ablate-memory"]["memory"] is False
+    assert m["ablate-skills"]["skills"] is False
+    assert m["ablate-research"]["research"] is False
 
 
 def test_render_baseline_passthrough(tmp_path):
@@ -29,9 +34,19 @@ def test_render_baseline_passthrough(tmp_path):
     assert 'system_prompt = "passthrough"' in baseline
     assert "tool_catalog = false" in baseline
     assert "repair_retries = 0" in baseline
+    assert "workflow_guards = false" in baseline
+    assert "[planning]\nenabled = false" in baseline
+    assert "[memory]\nenabled = false" in baseline
+    assert "[skills]\nenabled = false" in baseline
+    assert "[research]\nenabled = false" in baseline
     full = paths["full"].read_text()
     assert 'system_prompt = "replace"' in full
     assert "tool_catalog = true" in full
+    assert "workflow_guards = true" in full
+    assert "[planning]\nenabled = true" in full
+    assert "[memory]\nenabled = true" in full
+    assert "[skills]\nenabled = true" in full
+    assert "[research]\nenabled = true" in full
     # generated configs must be loadable by the harness
     from harness.config import load_settings
     s = load_settings(paths["baseline"])
