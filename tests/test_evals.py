@@ -16,6 +16,7 @@ def test_config_matrix():
     assert set(m["full"].values()) == {True}
     assert m["ablate-fewshot"]["fewshot"] is False
     assert m["ablate-fewshot"]["tool_prune"] is True
+    assert m["ablate-tool_catalog"]["tool_catalog"] is False
 
 
 def test_render_baseline_passthrough(tmp_path):
@@ -26,9 +27,11 @@ def test_render_baseline_passthrough(tmp_path):
     )
     baseline = paths["baseline"].read_text()
     assert 'system_prompt = "passthrough"' in baseline
+    assert "tool_catalog = false" in baseline
     assert "repair_retries = 0" in baseline
     full = paths["full"].read_text()
     assert 'system_prompt = "replace"' in full
+    assert "tool_catalog = true" in full
     # generated configs must be loadable by the harness
     from harness.config import load_settings
     s = load_settings(paths["baseline"])
@@ -39,9 +42,11 @@ def test_report_aggregation(tmp_path):
     rows = [
         {"model": "m", "config": "full", "success": True, "timed_out": False,
          "valid_calls": 8, "invalid_calls": 0, "repaired_calls": 1, "retries": 1,
+         "tool_surfaced": 2, "guard_fires": 1,
          "input_tokens": 1000, "output_tokens": 100, "session_wall_s": 30},
         {"model": "m", "config": "full", "success": False, "timed_out": True,
          "valid_calls": 2, "invalid_calls": 2, "repaired_calls": 0, "retries": 2,
+         "tool_surfaced": 0, "guard_fires": 3,
          "input_tokens": 500, "output_tokens": 50, "session_wall_s": 300},
     ]
     p = tmp_path / "results.jsonl"
@@ -52,13 +57,18 @@ def test_report_aggregation(tmp_path):
     assert m["timeout_rate"] == 0.5
     assert m["post_repair_invalid_rate"] == 2 / 12
     assert m["retries_per_session"] == 1.5
+    assert m["tool_surfaced_per_session"] == 1.0
+    assert m["guard_fires_per_session"] == 2.0
     md = eval_report.markdown(agg)
     assert "| m | full |" in md
 
 
 def test_all_tasks_complete_and_checkers_valid():
     names = {p.name for p in TASKS.iterdir()}
-    assert names == {"fix-test", "add-endpoint", "rename-refactor", "find-and-report", "multi-step"}
+    assert names == {
+        "fix-test", "add-endpoint", "rename-refactor", "find-and-report",
+        "multi-step", "tool-discovery", "long-horizon",
+    }
     for task in TASKS.iterdir():
         assert (task / "prompt.txt").exists(), task
         assert (task / "check.sh").exists(), task
@@ -69,7 +79,10 @@ def test_all_tasks_complete_and_checkers_valid():
 def test_broken_tasks_fail_their_own_checks(tmp_path):
     """Initial repo state must FAIL the checker (otherwise the task tests nothing)."""
     import shutil
-    for name in ("fix-test", "add-endpoint", "multi-step", "rename-refactor"):
+    for name in (
+        "fix-test", "add-endpoint", "multi-step", "rename-refactor",
+        "tool-discovery", "long-horizon",
+    ):
         work = tmp_path / name
         shutil.copytree(TASKS / name / "repo_template", work)
         shutil.copy(TASKS / name / "check.sh", work / "check.sh")

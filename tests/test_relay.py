@@ -9,6 +9,8 @@ from harness.ir import (
     TextPart,
     ToolCall,
     ToolDef,
+    ToolCallPart,
+    ToolResultPart,
     Turn,
 )
 from harness.profiles.registry import get_profile
@@ -20,6 +22,20 @@ READ_SCHEMA = {
     "type": "object",
     "properties": {"file_path": {"type": "string"}},
     "required": ["file_path"],
+}
+EDIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "file_path": {"type": "string"},
+        "old_string": {"type": "string"},
+        "new_string": {"type": "string"},
+    },
+    "required": ["file_path", "old_string", "new_string"],
+}
+BASH_SCHEMA = {
+    "type": "object",
+    "properties": {"command": {"type": "string"}},
+    "required": ["command"],
 }
 
 
@@ -136,6 +152,16 @@ async def test_cross_turn_loop_broken_with_feedback():
     assert evs[-1].stop_reason == "end_turn"
 
 
+async def test_cross_turn_loop_records_guard_fire():
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c9", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    fake.push([text_chunk("the config is in /x; done"), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    [e async for e in run(conv_with_repeats(3), get_profile("qwen"), backend, Settings(), metrics)]
+    assert metrics["guard_fires"]["same_approach"] == 1
+
+
 async def test_two_prior_repeats_pass_through():
     # re-running a command a couple of times is legitimate (e.g. pytest
     # after a fix); only sustained repetition is broken
@@ -215,3 +241,76 @@ async def test_truly_unknown_tool_still_fails_with_feedback():
                                 backend, Settings(), metrics=metrics)]
     assert not any(isinstance(e, ToolCall) for e in evs)
     assert metrics["tool_surfaced"] == 0
+
+
+def conv_with_edit_tools(turns=()) -> Conversation:
+    return Conversation(
+        "sys",
+        tuple(turns) or (Turn("user", (TextPart("fix /x"),)),),
+        (
+            ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA),
+            ToolDef("Edit", "edits", EDIT_SCHEMA, EDIT_SCHEMA),
+            ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA),
+        ),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_edit_without_read_guard_retries_with_feedback():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv_with_edit_tools(), get_profile("qwen"), backend, Settings(), metrics)]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert "Read '/x' before editing" in str(fake.requests[1])
+    assert metrics["guard_fires"]["edit_without_read"] == 1
+
+
+async def test_edit_without_read_guard_can_be_disabled():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
+        finish_chunk("tool_calls"),
+    ])
+    s = Settings()
+    s.pipeline.guard_edit_without_read = False
+    backend = make(fake, "openai")
+    evs = [e async for e in run(conv_with_edit_tools(), get_profile("qwen"), backend, s)]
+    assert any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert len(fake.requests) == 1
+
+
+def conv_after_unverified_edit() -> Conversation:
+    turns = (
+        Turn("user", (TextPart("fix /x"),)),
+        Turn("assistant", (ToolCallPart("e1", "Edit", {
+            "file_path": "/x", "old_string": "a", "new_string": "b",
+        }),)),
+        Turn("user", (ToolResultPart("e1", "edited"),)),
+    )
+    return conv_with_edit_tools(turns)
+
+
+async def test_done_claim_after_edit_requires_verification():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    fake.push([tool_chunk("b1", "Bash", '{"command": "python3 test_x.py"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_after_unverified_edit(), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert len(fake.requests) == 2
+    assert TextDelta("done") not in evs
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert "have not run a relevant test" in str(fake.requests[1])
+    assert metrics["guard_fires"]["verify_after_edit"] == 1

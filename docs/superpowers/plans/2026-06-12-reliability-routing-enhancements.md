@@ -1,8 +1,10 @@
 # Reliability & Routing Enhancements Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Eliminate the measured top defects from 1,386 proxied requests: phantom empty-name tool calls (96 invalid / 144 retries on qwen27), main-role overload (81% of traffic on one backend), task loss under long-session eviction, context-free eviction markers, and the unstarted SFT data flywheel.
+
+**Status:** done 2026-06-12.
 
 **Architecture:** Five independent, individually-shippable changes: a parser flush guard in the qwen/openai profile, fingerprint-based role detection in the router, an eviction anchor + structured digest in the history stage, and config flips for traces/dumps. Each lands with a failing test first.
 
@@ -21,7 +23,7 @@
 - Modify: `src/harness/profiles/base.py:198-204` (the flush loop in `parse`)
 - Test: `tests/test_profiles.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_profiles.py` (reuse that file's existing chunk-builder helpers if present; otherwise this standalone version):
 
@@ -53,12 +55,12 @@ async def test_phantom_tool_slot_dropped():
     assert [c.name for c in calls] == ["Read", "Read"]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_profiles.py::test_phantom_tool_slot_dropped -q`
 Expected: FAIL — three ToolCalls yielded, one with name `""`.
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 In `src/harness/profiles/base.py`, flush loop:
 
@@ -76,12 +78,12 @@ In `src/harness/profiles/base.py`, flush loop:
                 yield ToolCall(slot["id"], slot["name"], {}, raw_arguments=raw)
 ```
 
-- [ ] **Step 4: Run tests to verify pass**
+- [x] **Step 4: Run tests to verify pass**
 
 Run: `.venv/bin/python -m pytest tests/test_profiles.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/profiles/base.py tests/test_profiles.py
@@ -95,7 +97,7 @@ git commit -m "fix: drop phantom empty tool-call slots from vLLM parallel-call s
 - Modify: `src/harness/server.py` (the `role = "fast" if "haiku" …` line → `request_role(body)`; import it)
 - Test: `tests/test_pool_router.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_pool_router.py` (adapt to its existing fixture style):
 
@@ -124,12 +126,12 @@ def test_request_role_unknown_defaults_main():
     assert request_role({"model": "claude-opus-4-8", "system": "custom"}) == "main"
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/python -m pytest tests/test_pool_router.py -q`
 Expected: FAIL — `request_role` not defined.
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 In `src/harness/router.py` after `session_key`:
 
@@ -166,11 +168,11 @@ In `Router.pick`, replace the role line and mirror the busy-overflow for subagen
 
 In `src/harness/server.py`: import `request_role` alongside `Router, session_key`; replace the inline `role = "fast" if "haiku" in (body.get("model") or "") else "main"` with `role = request_role(body)`.
 
-- [ ] **Step 4: Full suite**
+- [x] **Step 4: Full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q` — all pass (watch the fleet-routing tests near `_fleet_toml` in `test_server.py`; if one asserts subagent prompts route to `main`, that assertion encodes the old bug and may be updated with a comment).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/router.py src/harness/server.py tests/test_pool_router.py
@@ -183,7 +185,7 @@ git commit -m "feat: route Task/SDK subagent requests to the subagent role"
 - Modify: `src/harness/pipeline/history.py` (pass 2)
 - Test: `tests/test_history.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_eviction_pins_first_user_turn():
@@ -197,12 +199,12 @@ def test_eviction_pins_first_user_turn():
     assert any("fix the bug" in t for t in first_texts)
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `.venv/bin/python -m pytest tests/test_history.py::test_eviction_pins_first_user_turn -q`
 Expected: FAIL — turn 0 is the eviction marker, "fix the bug" evicted.
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 In `HistoryStage.apply`, before pass 2 splits `head` into groups, peel off an anchor:
 
@@ -225,11 +227,11 @@ In `HistoryStage.apply`, before pass 2 splits `head` into groups, peel off an an
         return conv
 ```
 
-- [ ] **Step 4: Verify pass + suite**
+- [x] **Step 4: Verify pass + suite**
 
 Run: `.venv/bin/python -m pytest tests/test_history.py tests/test_server.py -q`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/pipeline/history.py tests/test_history.py
@@ -247,7 +249,7 @@ latency, zero dependency on the fast backend being warm, and byte-stable
 between compaction events so the KV prefix is only invalidated when eviction
 itself changes. An LLM summary can layer on later behind config.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_eviction_digest_names_tools():
@@ -262,12 +264,12 @@ def test_eviction_digest_names_tools():
     assert "turns" in marker_texts[0]          # says how much was cut
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `.venv/bin/python -m pytest tests/test_history.py::test_eviction_digest_names_tools -q`
 Expected: FAIL — marker is the bare "[earlier conversation elided by harness]".
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 Replace the `EVICT_MARKER` constant with a builder, and accumulate evicted groups in the pass-2 loop:
 
@@ -293,11 +295,11 @@ def _digest(evicted: list[tuple[Turn, ...]]) -> Turn:
 
 (import `ToolCallPart` from `harness.ir`.) In the loop, collect `dropped.append(groups.pop(0))` and build `marker = (_digest(dropped),)`.
 
-- [ ] **Step 4: Verify pass + full suite**
+- [x] **Step 4: Verify pass + full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q` — `test_eviction_keeps_pairing` asserts on the word "elided", which the digest retains.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/pipeline/history.py tests/test_history.py
@@ -309,7 +311,7 @@ git commit -m "feat: eviction digest names elided tool activity"
 **Files:**
 - Modify: `harness.toml`
 
-- [ ] **Step 1: Edit config**
+- [x] **Step 1: Edit config**
 
 ```toml
 [debug]
@@ -319,18 +321,18 @@ dump_prompts = false
 enabled = true
 ```
 
-- [ ] **Step 2: Smoke-check the corpus builder against captured traces**
+- [x] **Step 2: Smoke-check the corpus builder against captured traces**
 
 Run after some live traffic: `.venv/bin/python scripts/corpus.py --help` (verify CLI loads; corpus build itself needs accumulated traces).
 
-- [ ] **Step 3: Restart service and verify**
+- [x] **Step 3: Restart service and verify**
 
 ```bash
 kill <pid>; nohup .venv/bin/python -m harness --config harness.toml >> logs/harness.out 2>&1 &
 curl -s localhost:8484/stats | python3 -m json.tool | head
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add harness.toml

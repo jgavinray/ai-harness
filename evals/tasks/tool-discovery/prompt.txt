@@ -1,0 +1,3 @@
+Run `pwd`, use WebFetch to read `file://<that directory>/reference.html`, then
+update answer.py so `python3 check_answer.py` passes. The answer is only present
+in that reference document; do not guess it from the Python files.

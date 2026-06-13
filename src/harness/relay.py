@@ -25,6 +25,13 @@ from harness.ir import (
     ToolCallPart,
     Turn,
 )
+from harness.guards import (
+    guard_done_claim,
+    guard_metrics,
+    guard_tool_call,
+    has_unverified_edit,
+    increment_guard,
+)
 from harness.profiles.base import Profile
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
@@ -80,6 +87,14 @@ def _append_feedback(conv: Conversation, bad: ToolCall, error: str) -> Conversat
     return replace(conv, turns=turns)
 
 
+def _append_guard_feedback(conv: Conversation, guard: str, message: str) -> Conversation:
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[workflow guard: {guard}]"),)),
+        Turn("user", (TextPart(message),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     """The model called a catalogued tool whose schema is not surfaced.
     Returns conv with the real ToolDef added (so validation, feedback,
@@ -107,6 +122,7 @@ async def run(
     m.setdefault("degenerate_aborts", 0)
     m.setdefault("loop_breaks", 0)
     m.setdefault("tool_surfaced", 0)
+    guard_metrics(m)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
@@ -123,6 +139,14 @@ async def run(
         loop_call: ToolCall | None = None
         loop_seen = 0
         emitted_valid_call = False
+        guarded_call: tuple[str, str] | None = None
+        guarded_done: tuple[str, str] | None = None
+        buffered_text: list[str] = []
+        buffer_text = (
+            settings.pipeline.workflow_guards
+            and settings.pipeline.guard_verify_after_edit
+            and has_unverified_edit(conv)
+        )
 
         async for ev in profile.parse(backend.stream(payload)):
             if isinstance(ev, (TextDelta, ThinkingDelta)):
@@ -135,6 +159,9 @@ async def run(
                     return
                 if isinstance(ev, ThinkingDelta) and settings.pipeline.reasoning == "strip":
                     continue
+                if isinstance(ev, TextDelta) and buffer_text:
+                    buffered_text.append(ev.text)
+                    continue
                 yield ev
             elif isinstance(ev, ToolCall):
                 fixed, error = repair_toolcall(ev, conv.tools)
@@ -145,6 +172,10 @@ async def run(
                         m["tool_surfaced"] += 1
                         fixed, error = repair_toolcall(ev, conv.tools)
                 if fixed is not None:
+                    guard = guard_tool_call(conv, fixed, settings)
+                    if guard is not None and attempts < settings.pipeline.repair_retries:
+                        guarded_call = guard
+                        break
                     seen = _repeat_count(conv, fixed)
                     if seen >= LOOP_THRESHOLD and attempts < settings.pipeline.repair_retries:
                         loop_call, loop_seen = fixed, seen
@@ -162,6 +193,12 @@ async def run(
                     raw = ev.raw_arguments or str(ev.arguments)
                     yield TextDelta(f"\n[invalid tool call {ev.name}: {bad_error or error}]\n{raw[:500]}")
             else:  # Done
+                if buffered_text and not emitted_valid_call and ev.stop_reason != "tool_use":
+                    guarded_done = guard_done_claim(conv, "".join(buffered_text), settings)
+                    if guarded_done is not None and attempts < settings.pipeline.repair_retries:
+                        break
+                    for text in buffered_text:
+                        yield TextDelta(text)
                 if not emitted_valid_call and ev.stop_reason == "tool_use":
                     # every call this turn failed validation and retries are gone
                     yield Done("end_turn", ev.input_tokens, ev.output_tokens)
@@ -172,8 +209,25 @@ async def run(
         if loop_call is not None:
             attempts += 1
             m["loop_breaks"] += 1
+            increment_guard(m, "same_approach")
             suppress_text = True
             conv = _append_loop_feedback(conv, loop_call, loop_seen)
+            continue
+
+        if guarded_call is not None:
+            attempts += 1
+            guard, message = guarded_call
+            increment_guard(m, guard)
+            suppress_text = True
+            conv = _append_guard_feedback(conv, guard, message)
+            continue
+
+        if guarded_done is not None:
+            attempts += 1
+            guard, message = guarded_done
+            increment_guard(m, guard)
+            suppress_text = True
+            conv = _append_guard_feedback(conv, guard, message)
             continue
 
         if bad_call is None:

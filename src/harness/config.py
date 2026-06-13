@@ -43,6 +43,9 @@ class PipelineCfg(BaseModel):
     repair_retries: int = 2
     recent_turns_protected: int = 4
     reasoning: str = "thinking"  # thinking | strip
+    workflow_guards: bool = True
+    guard_edit_without_read: bool = True
+    guard_verify_after_edit: bool = True
 
 
 class DebugCfg(BaseModel):

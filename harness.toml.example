@@ -23,6 +23,9 @@ fewshot = true
 repair_retries = 2
 recent_turns_protected = 4
 reasoning = "thinking"     # thinking | strip
+workflow_guards = true
+guard_edit_without_read = true
+guard_verify_after_edit = true
 
 [debug]
 dump_prompts = false

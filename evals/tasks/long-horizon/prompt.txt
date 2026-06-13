@@ -1,0 +1,2 @@
+Complete the ten TODO steps in `pipeline.py`, then run `python3 test_pipeline.py`
+and fix any remaining failures. Keep the existing public function names.

@@ -54,7 +54,8 @@ def aggregate_log(log_path: Path) -> dict:
     agg = {
         "requests": 0, "input_tokens": 0, "output_tokens": 0, "retries": 0,
         "repaired_calls": 0, "valid_calls": 0, "invalid_calls": 0,
-        "degenerate_aborts": 0, "wall_ms": 0,
+        "degenerate_aborts": 0, "tool_surfaced": 0, "guard_fires": 0,
+        "wall_ms": 0,
     }
     if not log_path.exists():
         return agg
@@ -63,7 +64,10 @@ def aggregate_log(log_path: Path) -> dict:
         agg["requests"] += 1
         for key in agg:
             if key != "requests":
-                agg[key] += rec.get(key) or 0
+                value = rec.get(key) or 0
+                if key == "guard_fires" and isinstance(value, dict):
+                    value = sum(value.values())
+                agg[key] += value
     return agg
 
 
@@ -97,7 +101,7 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
         try:
             proc = subprocess.run(
                 [claude_bin, "-p", prompt,
-                 "--allowedTools", "Read,Edit,Write,Bash,Grep,Glob"],
+                 "--allowedTools", "Read,Edit,Write,Bash,Grep,Glob,WebFetch"],
                 cwd=workdir, env=env, capture_output=True, text=True,
                 timeout=timeout_s,
             )

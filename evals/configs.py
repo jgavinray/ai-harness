@@ -7,6 +7,7 @@ from pathlib import Path
 STAGES = {
     "system_prompt": ('system_prompt = "replace"', 'system_prompt = "passthrough"'),
     "tool_prune": ("tool_prune = true", "tool_prune = false"),
+    "tool_catalog": ("tool_catalog = true", "tool_catalog = false"),
     "fewshot": ("fewshot = true", "fewshot = false"),
     "repair": ("repair_retries = 2", "repair_retries = 0"),
 }
