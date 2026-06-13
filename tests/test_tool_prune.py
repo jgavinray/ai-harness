@@ -167,3 +167,22 @@ def test_catalog_summaries_are_short():
     line = next(l for l in out.system.splitlines() if l.startswith("- Verbose"))
     assert len(line) <= 100
     assert "First sentence stays" in line
+
+
+def test_called_hidden_tool_stays_surfaced_next_request():
+    # Convergence: after the relay surfaces a tool and the model uses it,
+    # the NEXT request's history contains that call, so selection keeps
+    # the tool surfaced without the relay's help.
+    from harness.ir import ToolResultPart
+    turns = (
+        Turn("user", (TextPart("send the report to slack"),)),
+        Turn("assistant", (ToolCallPart("t1", "mcp__slack__send_message", {"text": "hi"}),)),
+        Turn("user", (ToolResultPart("t1", "sent"),)),
+        Turn("assistant", (TextPart("done"),)),
+        Turn("user", (TextPart("now also post it to the channel"),)),
+    )
+    out = ToolPruneStage().apply(
+        Conversation("s", turns, ALL_TOOLS + MCP_TOOLS, GenParams(max_tokens=100)),
+        Settings(),
+    )
+    assert "mcp__slack__send_message" in {t.name for t in out.tools}
