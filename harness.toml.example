@@ -42,6 +42,12 @@ dir = "~/.codex/skills"
 cache_dir = "~/.ai-harness/compiled-skills"
 max_tokens = 400
 
+[research]
+enabled = false             # opt in: `research: <url-or-file>` brief injection
+cache_dir = "~/.ai-harness/research"
+max_chars = 12000
+chunk_chars = 4000
+
 # ---- fleet mode (preferred): one [[backends]] block per server ----
 # [[backends]]
 # name = "big"

@@ -237,6 +237,38 @@ async def test_planning_scaffold_generated_once_and_injected():
     assert "Write a concrete execution plan" not in json.dumps(fake.requests[2])
 
 
+async def test_research_brief_generated_cached_and_injected(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("The service uses pytest -q and stores handlers in app.py.")
+    fake = FakeOpenAI()
+    fake.push([text_chunk("- Use pytest -q\n- Handler code lives in app.py"), finish_chunk("stop")])
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    fake.push([text_chunk("ok cached"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.research.enabled = True
+    settings.research.cache_dir = str(tmp_path / "research-cache")
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False)
+    body["messages"] = [{"role": "user", "content": f"research: file://{source}\nUse it."}]
+
+    async with client:
+        assert (await client.post("/v1/messages", json=body)).status_code == 200
+        assert (await client.post("/v1/messages", json=body)).status_code == 200
+
+    assert len(fake.requests) == 3
+    assert "Summarize this research source" in fake.requests[0]["messages"][0]["content"]
+    assert "## Research brief" in fake.requests[1]["messages"][0]["content"]
+    assert "Handler code lives in app.py" in fake.requests[1]["messages"][0]["content"]
+    assert "Summarize this research source" not in json.dumps(fake.requests[2])
+    assert "## Research brief" in fake.requests[2]["messages"][0]["content"]
+
+
 def _fleet_toml(roles: str) -> str:
     return (
         '[[backends]]\nname = "alpha"\nbase_url = "http://fake/v1"\n'

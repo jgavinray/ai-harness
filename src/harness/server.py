@@ -31,6 +31,7 @@ from harness.ir import Done
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens
 from harness.planning import PlanningManager
+from harness.research import ResearchManager
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -179,6 +180,7 @@ def create_app(
     logger = RequestLogger(settings.log.requests_path)
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
     planner = PlanningManager(settings)
+    research = ResearchManager(settings)
 
     async def fast_complete(messages: list[dict]) -> str:
         candidates = pool.with_role("fast") or pool.backends
@@ -273,6 +275,13 @@ def create_app(
         }
         start = time.monotonic()
         if role == "main":
+            try:
+                brief = await research.ensure(conv, pool, metrics)
+                conv = research.inject(conv, brief)
+                rendered = chosen.profile.render(conv, chosen.model_name)
+                _dump(settings, "rendered-payload", rendered)
+            except Exception as exc:
+                metrics["research_error"] = str(exc)
             metrics.setdefault("plan_drift", 0)
             try:
                 await planner.ensure(skey, conv, pool, metrics)

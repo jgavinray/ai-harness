@@ -83,6 +83,13 @@ class SkillsCfg(BaseModel):
     max_tokens: int = 400
 
 
+class ResearchCfg(BaseModel):
+    enabled: bool = False
+    cache_dir: str = "~/.ai-harness/research"
+    max_chars: int = 12000
+    chunk_chars: int = 4000
+
+
 class CacheCfg(BaseModel):
     enabled: bool = True
     ttl_s: float = 600.0
@@ -103,6 +110,7 @@ class Settings(BaseModel):
     memory: MemoryCfg = MemoryCfg()
     planning: PlanningCfg = PlanningCfg()
     skills: SkillsCfg = SkillsCfg()
+    research: ResearchCfg = ResearchCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

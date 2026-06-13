@@ -35,6 +35,7 @@ def aggregate(rows: list[dict]) -> dict[tuple[str, str], dict]:
             "guard_fires_per_session": sum(r.get("guard_fires", 0) for r in rs) / n,
             "plan_drift_per_session": sum(r.get("plan_drift", 0) for r in rs) / n,
             "capability_fallbacks_per_session": sum(r.get("capability_fallbacks", 0) for r in rs) / n,
+            "research_briefs_per_session": sum(r.get("research_briefs", 0) for r in rs) / n,
             "tokens_per_session": sum(r.get("input_tokens", 0) + r.get("output_tokens", 0) for r in rs) / n,
             "wall_s_per_session": sum(r.get("session_wall_s", 0) for r in rs) / n,
         }
@@ -47,6 +48,7 @@ def markdown(agg: dict[tuple[str, str], dict]) -> str:
             "tool_surfaced_per_session", "guard_fires_per_session",
             "plan_drift_per_session",
             "capability_fallbacks_per_session",
+            "research_briefs_per_session",
             "tokens_per_session", "wall_s_per_session"]
     lines = [
         "# Efficacy report",
