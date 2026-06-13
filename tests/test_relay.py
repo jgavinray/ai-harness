@@ -179,3 +179,39 @@ async def test_hidden_tool_valid_call_passes_through():
     assert any(isinstance(e, ToolCall) and e.name == "WebFetch" for e in evs)
     assert len(fake.requests) == 1
     assert metrics["tool_surfaced"] == 1
+
+
+async def test_hidden_tool_invalid_call_swaps_schema_and_retries():
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c1", "WebFetch", '{"address": "x"}'),   # wrong param
+               finish_chunk("tool_calls")])
+    fake.push([tool_chunk("c2", "WebFetch", '{"url": "https://x"}'),
+               finish_chunk("tool_calls")])
+    fake.push([finish_chunk("stop")])  # safety
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv_with_hidden_tool(), get_profile("qwen"),
+                                backend, Settings(), metrics=metrics)]
+    assert len(fake.requests) == 2
+    # the retry request must offer the WebFetch schema
+    retry_tools = [t["function"]["name"] for t in fake.requests[1].get("tools", [])]
+    assert "WebFetch" in retry_tools
+    # and the valid second call is emitted
+    assert any(isinstance(e, ToolCall) and e.arguments == {"url": "https://x"} for e in evs)
+    assert metrics["tool_surfaced"] == 1
+
+
+async def test_truly_unknown_tool_still_fails_with_feedback():
+    # A tool in neither the surfaced set nor the catalog keeps today's
+    # behavior: feedback retry, then degrade to text.
+    fake = FakeOpenAI()
+    bad = [tool_chunk("c1", "Nonexistent", '{"a": 1}'), finish_chunk("tool_calls")]
+    fake.push(bad)
+    fake.push(bad)
+    fake.push(bad)
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv_with_hidden_tool(), get_profile("qwen"),
+                                backend, Settings(), metrics=metrics)]
+    assert not any(isinstance(e, ToolCall) for e in evs)
+    assert metrics["tool_surfaced"] == 0
