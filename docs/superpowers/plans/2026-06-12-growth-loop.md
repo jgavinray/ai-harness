@@ -18,6 +18,8 @@ is an auditable config change.
   corpus produced by `scripts/corpus.py`.
 - [x] Add `scripts/relax_scaffold.py` to apply eval-gated backend
   `relaxed = [...]` config edits for guard/scaffold relaxation.
+- [x] Honor backend `relaxed = [...]` entries at runtime so promoted models can
+  skip retired planning, guard, skill, research, catalog, or few-shot scaffolds.
 - [x] Document candidate roles in `harness.toml.example`.
 - [x] Add routing and script tests.
 

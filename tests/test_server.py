@@ -16,6 +16,20 @@ READ_TOOL = {
     },
 }
 
+EDIT_TOOL = {
+    "name": "Edit",
+    "description": "Edits a file",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "old_string": {"type": "string"},
+            "new_string": {"type": "string"},
+        },
+        "required": ["file_path", "old_string", "new_string"],
+    },
+}
+
 
 def request_body(stream: bool = True, system=None, tools=None) -> dict:
     return {
@@ -235,6 +249,80 @@ async def test_planning_scaffold_generated_once_and_injected():
     assert "Plan status: Step 1/3" in first_exec
     assert "## Execution plan" in second_exec
     assert "Write a concrete execution plan" not in json.dumps(fake.requests[2])
+
+
+async def test_backend_relaxed_planning_skips_planner():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.planning.enabled = True
+    settings.backends = [
+        PoolBackendCfg(
+            name="ready",
+            base_url="http://fake/v1",
+            model="m",
+            roles=["main", "subagent", "fast"],
+            relaxed=["planning"],
+        )
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    async with client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
+    sent = fake.requests[0]["messages"][0]["content"]
+    assert "Write a concrete execution plan" not in sent
+    assert "## Execution plan" not in sent
+
+
+async def test_backend_relaxed_edit_guard_allows_direct_edit():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
+        finish_chunk("tool_calls"),
+    ])
+
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(
+            name="ready",
+            base_url="http://fake/v1",
+            model="m",
+            roles=["main", "subagent", "fast"],
+            relaxed=["guard_edit_without_read"],
+        )
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    async with client:
+        resp = await client.post(
+            "/v1/messages",
+            json=request_body(stream=True, tools=[EDIT_TOOL]),
+        )
+
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
+    evs = sse_events(resp.text)
+    tool_start = next(
+        d for n, d in evs
+        if n == "content_block_start" and d["content_block"]["type"] == "tool_use"
+    )
+    assert tool_start["content_block"]["name"] == "Edit"
 
 
 async def test_research_brief_generated_cached_and_injected(tmp_path):

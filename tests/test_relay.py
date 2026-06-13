@@ -355,6 +355,7 @@ async def test_plan_done_claim_before_final_step_is_drift():
     assert TextDelta("done") not in evs
     assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
     assert metrics["guard_fires"]["plan_drift"] == 1
+    assert metrics["plan_drift"] == 1
 
 
 async def test_edit_during_verify_plan_step_is_drift():
@@ -377,6 +378,7 @@ async def test_edit_during_verify_plan_step_is_drift():
     assert not any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
     assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
     assert metrics["guard_fires"]["plan_drift"] == 1
+    assert metrics["plan_drift"] == 1
 
 
 async def test_skill_call_injects_compiled_procedure(tmp_path):

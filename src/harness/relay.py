@@ -132,6 +132,7 @@ async def run(
     m.setdefault("loop_breaks", 0)
     m.setdefault("tool_surfaced", 0)
     m.setdefault("skill_compiled", 0)
+    m.setdefault("plan_drift", 0)
     guard_metrics(m)
     attempts = 0
     suppress_text = False
@@ -239,6 +240,8 @@ async def run(
             attempts += 1
             guard, message = guarded_call
             increment_guard(m, guard)
+            if guard == "plan_drift":
+                m["plan_drift"] += 1
             suppress_text = True
             conv = _append_guard_feedback(conv, guard, message)
             continue
@@ -255,6 +258,8 @@ async def run(
             attempts += 1
             guard, message = guarded_done
             increment_guard(m, guard)
+            if guard == "plan_drift":
+                m["plan_drift"] += 1
             suppress_text = True
             conv = _append_guard_feedback(conv, guard, message)
             continue

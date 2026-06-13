@@ -64,6 +64,27 @@ KV_USAGE_GAUGES = {
 KV_RESIDENT_SESSIONS = 8  # sessions remembered per backend for the estimate
 
 
+def _apply_relaxed(settings: Settings, relaxed: list[str]) -> None:
+    """Disable eval-retired scaffolds for the backend handling this request."""
+    for item in relaxed:
+        if item == "workflow_guards":
+            settings.pipeline.workflow_guards = False
+        elif item == "guard_edit_without_read":
+            settings.pipeline.guard_edit_without_read = False
+        elif item == "guard_verify_after_edit":
+            settings.pipeline.guard_verify_after_edit = False
+        elif item in {"planning", "planning_scaffold"}:
+            settings.planning.enabled = False
+        elif item == "skills":
+            settings.skills.enabled = False
+        elif item == "research":
+            settings.research.enabled = False
+        elif item == "tool_catalog":
+            settings.pipeline.tool_catalog = False
+        elif item == "fewshot":
+            settings.pipeline.fewshot = False
+
+
 async def _kv_usage(b, client: httpx.AsyncClient) -> dict | None:
     """Live KV occupancy: measured from the engine's gauge when it has one,
     otherwise (modern llama.cpp dropped its KV metrics) estimated from slot
@@ -253,6 +274,7 @@ def create_app(
         # so route first and pipeline against that backend's context window.
         req_settings = settings.model_copy(deep=True)
         req_settings.profile.context_window = chosen.cfg.context_window
+        _apply_relaxed(req_settings, chosen.cfg.relaxed)
         conv = run_pipeline(conv, req_settings, stages)
         skey = session_key(body)
         role = request_role(body)
@@ -280,34 +302,36 @@ def create_app(
         }
         start = time.monotonic()
         if role == "main":
-            try:
-                brief = await research.ensure(conv, pool, metrics)
-                fact = memory_fact(conv, brief or "")
-                if fact and settings.memory.enabled:
-                    memory.merge(project_key(conv.system), fact)
-                conv = research.inject(conv, brief)
-                rendered = chosen.profile.render(conv, chosen.model_name)
-                _dump(settings, "rendered-payload", rendered)
-            except Exception as exc:
-                metrics["research_error"] = str(exc)
-            metrics.setdefault("plan_drift", 0)
-            try:
-                await planner.ensure(skey, conv, pool, metrics)
-                conv = planner.inject(skey, conv)
-                rendered = chosen.profile.render(conv, chosen.model_name)
-                _dump(settings, "rendered-payload", rendered)
-            except BackendError as exc:
-                metrics["plan_error"] = str(exc)
+            if req_settings.research.enabled:
+                try:
+                    brief = await research.ensure(conv, pool, metrics)
+                    fact = memory_fact(conv, brief or "")
+                    if fact and settings.memory.enabled:
+                        memory.merge(project_key(conv.system), fact)
+                    conv = research.inject(conv, brief)
+                    rendered = chosen.profile.render(conv, chosen.model_name)
+                    _dump(settings, "rendered-payload", rendered)
+                except Exception as exc:
+                    metrics["research_error"] = str(exc)
+            if req_settings.planning.enabled:
                 metrics.setdefault("plan_drift", 0)
+                try:
+                    await planner.ensure(skey, conv, pool, metrics)
+                    conv = planner.inject(skey, conv)
+                    rendered = chosen.profile.render(conv, chosen.model_name)
+                    _dump(settings, "rendered-payload", rendered)
+                except BackendError as exc:
+                    metrics["plan_error"] = str(exc)
+                    metrics.setdefault("plan_drift", 0)
 
-        cacheable = settings.cache.enabled and role in settings.cache.roles
+        cacheable = req_settings.cache.enabled and role in req_settings.cache.roles
         cache_key = payload_key(rendered) if cacheable else None
         cached_events = rcache.get(cache_key) if cache_key else None
         if cached_events is not None:
             record["cache"] = "response"
             events = _replay(cached_events)
         else:
-            events = relay.run(conv, chosen.profile, chosen, settings, metrics=metrics)
+            events = relay.run(conv, chosen.profile, chosen, req_settings, metrics=metrics)
 
         buffer: list = []
 
