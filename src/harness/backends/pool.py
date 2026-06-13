@@ -150,13 +150,17 @@ class BackendPool:
     def with_role(self, role: str, include_down: bool = False) -> list[PooledBackend]:
         return [
             b for b in self.backends
-            if role in b.roles and (include_down or not b.is_down())
+            if role in b.roles
+            and "candidate" not in b.roles
+            and (include_down or not b.is_down())
         ]
 
     def with_capabilities(self, needs: set[str]) -> list[PooledBackend]:
         return [
             b for b in self.backends
-            if needs.issubset(set(b.cfg.capabilities)) and not b.is_down()
+            if needs.issubset(set(b.cfg.capabilities))
+            and "candidate" not in b.roles
+            and not b.is_down()
         ]
 
     async def stream(self, b: PooledBackend, payload: dict[str, Any]) -> AsyncIterator[dict]:

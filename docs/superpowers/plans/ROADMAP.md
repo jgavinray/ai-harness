@@ -17,7 +17,7 @@ never execute a stale plan without re-reading the files it names.**
 | 6 | Skill compiler (②) | `2026-06-12-skill-compiler.md` | **done 2026-06-13** |
 | 7 | Capability routing + OCR fallback (⑧) | `2026-06-12-capability-routing.md` | **done 2026-06-13** |
 | 8 | Research pipeline (③) | `2026-06-12-research-pipeline.md` | **done 2026-06-13** |
-| 9 | Growth loop + candidate adoption (⑦) | `(to write)` | — |
+| 9 | Growth loop + candidate adoption (⑦) | `2026-06-12-growth-loop.md` | **done 2026-06-13** |
 
 ## Plan-writing checklists (what each future plan must cover)
 

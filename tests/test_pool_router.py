@@ -334,3 +334,32 @@ def test_affinity_sticky_for_large_context_despite_capacity():
     assert router.pick(body).name == "big"   # affinity established
     pool.get("big").in_flight = 1            # saturated
     assert router.pick(body).name == "big"   # large context: stays anyway
+
+
+def test_candidate_backend_excluded_from_live_routing():
+    s = Settings()
+    s.backends = [
+        PoolBackendCfg(name="live", base_url="http://live/v1", model="m", roles=["main"]),
+        PoolBackendCfg(name="cand", base_url="http://cand/v1", model="c", roles=["candidate"]),
+    ]
+    router = Router(make_pool(s), s)
+    body = {"model": "claude-opus-4-8", "system": "custom",
+            "messages": [{"role": "user", "content": "task"}]}
+    assert router.pick(body).name == "live"
+
+
+def test_candidate_not_used_as_capability_backend():
+    s = Settings()
+    s.backends = [
+        PoolBackendCfg(name="live", base_url="http://live/v1", model="m", roles=["main"]),
+        PoolBackendCfg(
+            name="cand", base_url="http://cand/v1", model="c",
+            roles=["candidate"], capabilities=["vision"],
+        ),
+    ]
+    router = Router(make_pool(s), s)
+    body = {"model": "claude-opus-4-8", "system": "custom",
+            "messages": [{"role": "user", "content": [
+                {"type": "image", "source": {"data": "abc"}},
+            ]}]}
+    assert router.pick(body).name == "live"

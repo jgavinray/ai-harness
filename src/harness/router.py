@@ -145,7 +145,12 @@ class Router:
         if not candidates:
             # everything for the role is down or saturated; degrade to any
             # live backend (capacity becomes soft), then to anything at all
-            candidates = [b for b in self.pool.backends if not b.is_down()] or self.pool.backends
+            live = [
+                b for b in self.pool.backends
+                if not b.is_down() and "candidate" not in b.roles
+            ]
+            candidates = live or [b for b in self.pool.backends if "candidate" not in b.roles]
+            candidates = candidates or self.pool.backends
 
         # least-loaded; ties go to backends on a cold host, then non-fast
         # backends (fast-role hardware is the cheap tier), then to whoever
