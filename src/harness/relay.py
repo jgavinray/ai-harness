@@ -104,6 +104,29 @@ def _append_skill_feedback(conv: Conversation, name: str, compiled: str) -> Conv
     return replace(conv, turns=turns)
 
 
+def _append_invalid_skill_feedback(conv: Conversation, attempted: str) -> Conversation:
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[invalid Skill call: {attempted[:200]}]"),)),
+        Turn("user", (TextPart(
+            "That Skill request could not be validated by the harness. Continue "
+            "the task directly with concrete tools such as Bash, Read, Grep, "
+            "Glob, Edit, or Write; do not wait for a skill."
+        ),)),
+    )
+    return replace(conv, turns=turns)
+
+
+def _append_tool_required_feedback(conv: Conversation) -> Conversation:
+    turns = conv.turns + (
+        Turn("assistant", (TextPart("[tool call required after invalid Skill request]"),)),
+        Turn("user", (TextPart(
+            "Your previous response still did not call a tool. Continue now by "
+            "calling Bash, Read, Grep, Glob, Edit, or Write."
+        ),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     """The model called a catalogued tool whose schema is not surfaced.
     Returns conv with the real ToolDef added (so validation, feedback,
@@ -131,6 +154,7 @@ async def run(
     m.setdefault("degenerate_aborts", 0)
     m.setdefault("loop_breaks", 0)
     m.setdefault("tool_surfaced", 0)
+    m.setdefault("tool_surfaced_names", [])
     m.setdefault("skill_compiled", 0)
     m.setdefault("plan_drift", 0)
     guard_metrics(m)
@@ -138,6 +162,7 @@ async def run(
     suppress_text = False
     constraint_schema: dict | None = None
     skill_compiler = SkillCompiler(settings, profile.name)
+    require_tool_after_invalid_skill = False
 
     model_name = getattr(backend, "model_name", settings.backend.model)
     while True:
@@ -154,6 +179,8 @@ async def run(
         guarded_call: tuple[str, str] | None = None
         guarded_done: tuple[str, str] | None = None
         skill_feedback: tuple[str, str] | None = None
+        invalid_skill: str | None = None
+        tool_required_after_invalid_skill = False
         buffered_text: list[str] = []
         buffer_text = (
             settings.pipeline.workflow_guards
@@ -186,7 +213,16 @@ async def run(
                     if surfaced is not None:
                         conv = surfaced
                         m["tool_surfaced"] += 1
+                        m["tool_surfaced_names"].append(ev.name)
                         fixed, error = repair_toolcall(ev, conv.tools)
+                if (
+                    fixed is None
+                    and ev.name == "Skill"
+                    and settings.skills.enabled
+                    and attempts < settings.pipeline.repair_retries
+                ):
+                    invalid_skill = ev.raw_arguments or str(ev.arguments)
+                    break
                 if fixed is not None:
                     if fixed.name == "Skill" and settings.skills.enabled:
                         name = skill_name(fixed.arguments)
@@ -203,6 +239,7 @@ async def run(
                         loop_call, loop_seen = fixed, seen
                         break
                     emitted_valid_call = True
+                    require_tool_after_invalid_skill = False
                     m["valid_calls"] += 1
                     if ev.raw_arguments:  # arrived malformed, json-repaired locally
                         m["repaired_calls"] += 1
@@ -225,6 +262,14 @@ async def run(
                     # every call this turn failed validation and retries are gone
                     yield Done("end_turn", ev.input_tokens, ev.output_tokens)
                 else:
+                    if (
+                        require_tool_after_invalid_skill
+                        and not emitted_valid_call
+                        and ev.stop_reason != "tool_use"
+                        and attempts < settings.pipeline.repair_retries
+                    ):
+                        tool_required_after_invalid_skill = True
+                        break
                     yield ev
                 return
 
@@ -252,6 +297,19 @@ async def run(
             m["skill_compiled"] += 1
             suppress_text = True
             conv = _append_skill_feedback(conv, name, compiled)
+            continue
+
+        if invalid_skill is not None:
+            attempts += 1
+            suppress_text = True
+            require_tool_after_invalid_skill = True
+            conv = _append_invalid_skill_feedback(conv, invalid_skill)
+            continue
+
+        if tool_required_after_invalid_skill:
+            attempts += 1
+            suppress_text = True
+            conv = _append_tool_required_feedback(conv)
             continue
 
         if guarded_done is not None:

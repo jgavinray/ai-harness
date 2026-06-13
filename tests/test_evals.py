@@ -106,6 +106,11 @@ def test_all_tasks_complete_and_checkers_valid():
         subprocess.run(["bash", "-n", str(task / "check.sh")], check=True)
 
 
+def test_runner_allows_skill_tool_for_skill_compiler_eval():
+    runner = Path("evals/run.py").read_text()
+    assert "Read,Edit,Write,Bash,Grep,Glob,WebFetch,Skill" in runner
+
+
 def test_broken_tasks_fail_their_own_checks(tmp_path):
     """Initial repo state must FAIL the checker (otherwise the task tests nothing)."""
     import shutil

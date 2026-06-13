@@ -210,6 +210,7 @@ async def test_hidden_tool_valid_call_passes_through():
     assert any(isinstance(e, ToolCall) and e.name == "WebFetch" for e in evs)
     assert len(fake.requests) == 1
     assert metrics["tool_surfaced"] == 1
+    assert metrics["tool_surfaced_names"] == ["WebFetch"]
 
 
 async def test_hidden_tool_invalid_call_swaps_schema_and_retries():
@@ -230,6 +231,7 @@ async def test_hidden_tool_invalid_call_swaps_schema_and_retries():
     # and the valid second call is emitted
     assert any(isinstance(e, ToolCall) and e.arguments == {"url": "https://x"} for e in evs)
     assert metrics["tool_surfaced"] == 1
+    assert metrics["tool_surfaced_names"] == ["WebFetch"]
 
 
 async def test_truly_unknown_tool_still_fails_with_feedback():
@@ -409,3 +411,35 @@ async def test_skill_call_injects_compiled_procedure(tmp_path):
     assert "Compiled skill procedure for review" in str(fake.requests[1])
     assert "Inspect the diff" in str(fake.requests[1])
     assert metrics["skill_compiled"] == 1
+
+
+async def test_invalid_hidden_skill_forces_concrete_tool_retry(tmp_path):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    skill = ToolDef("Skill", "load a skill", SKILL_SCHEMA, SKILL_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("fix the failing test"),)),),
+        (read,),
+        GenParams(max_tokens=512, stream=True),
+        all_tools=(read, skill),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("s1", "Skill", '{"skill": "superpowers:systematic-debugging"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([text_chunk("I'll use that skill."), finish_chunk("stop")])
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    s = Settings()
+    s.skills.enabled = True
+    s.skills.dir = str(skills)
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, s, metrics)]
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert metrics["tool_surfaced"] == 1
+    assert metrics["tool_surfaced_names"] == ["Skill"]
+    assert "could not be validated by the harness" in str(fake.requests[1])
+    assert "Your previous response still did not call a tool" in str(fake.requests[2])

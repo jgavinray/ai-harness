@@ -101,8 +101,11 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
         start = time.time()
         try:
             proc = subprocess.run(
-                [claude_bin, "-p", prompt,
-                 "--allowedTools", "Read,Edit,Write,Bash,Grep,Glob,WebFetch"],
+                [
+                    claude_bin, "-p", prompt,
+                    "--allowedTools",
+                    "Read,Edit,Write,Bash,Grep,Glob,WebFetch,Skill",
+                ],
                 cwd=workdir, env=env, capture_output=True, text=True,
                 timeout=timeout_s,
             )
