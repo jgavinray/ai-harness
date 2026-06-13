@@ -1,4 +1,11 @@
-"""Deterministic workflow guards over conversation history."""
+"""Deterministic workflow guards over conversation history.
+
+These guards are deliberately plain software instead of model calls. They inspect
+the already-rendered conversation state and return a named nudge plus feedback
+text when the next model action would violate a workflow invariant. The relay
+owns retry mechanics and metrics; this module owns only the guard predicates and
+the feedback wording.
+"""
 
 from __future__ import annotations
 
