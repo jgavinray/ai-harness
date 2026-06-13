@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 DASHBOARD = Path(__file__).parent / "static" / "dashboard.html"
 
-from harness import relay
+from harness import ocr, relay
 from harness.backends.base import BackendError
 from harness.backends.pool import BackendPool
 from harness.cache import ResponseCache, payload_key
@@ -217,13 +217,18 @@ def create_app(
                 continue
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "image":
+                    extracted = ocr.extract_text_from_block(block)
+                    if extracted:
+                        text = f"[image OCR fallback]\n{extracted}"
+                    else:
+                        text = (
+                            "[image block received; no vision backend is configured. "
+                            "OCR/caption fallback could not extract text, so proceed from surrounding text.]"
+                        )
                     block.clear()
                     block.update({
                         "type": "text",
-                        "text": (
-                            "[image block received; no vision backend is configured. "
-                            "OCR/caption fallback could not extract text, so proceed from surrounding text.]"
-                        ),
+                        "text": text,
                     })
                     count += 1
         return count

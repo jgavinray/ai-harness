@@ -86,3 +86,21 @@ async def test_image_request_uses_text_fallback_without_vision_backend(tmp_path)
     assert "no vision backend is configured" in sent
     rec = json.loads(log.read_text().strip())
     assert rec["capability_fallbacks"] == 1
+
+
+async def test_image_request_injects_ocr_text_when_available(tmp_path, monkeypatch):
+    from harness import ocr
+
+    monkeypatch.setattr(ocr, "extract_text_from_block", lambda block: "TOTAL 42")
+    settings = Settings()
+    fake = FakeOpenAI()
+    fake.push([text_chunk("hi"), finish_chunk("stop")])
+    body = request_body(stream=False)
+    body["messages"] = [{"role": "user", "content": [
+        {"type": "image", "source": {"type": "base64", "data": "abc"}},
+    ]}]
+    resp = await post(settings, fake, body)
+    assert resp.status_code == 200
+    sent = json.dumps(fake.requests[0])
+    assert "[image OCR fallback]" in sent
+    assert "TOTAL 42" in sent

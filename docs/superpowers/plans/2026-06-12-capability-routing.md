@@ -14,6 +14,8 @@ exists.
 - [x] Route image requests to a backend tagged with `vision` when one is live.
 - [x] Preserve one-endpoint behavior when no vision backend exists by replacing
   image blocks with a framed text fallback before decoding.
+- [x] Add optional local OCR extraction through Pillow/pytesseract when those
+  dependencies are installed; otherwise degrade to the framed fallback notice.
 - [x] Log `capability_fallbacks` in request metrics and eval reports.
 - [x] Document backend capability tags in `harness.toml.example`.
 - [x] Add router and server logging tests for capability selection and fallback.
@@ -30,6 +32,6 @@ Run:
 Observed:
 
 ```text
-34 passed
-174 passed
+5 passed
+181 passed
 ```
