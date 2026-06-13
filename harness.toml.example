@@ -59,6 +59,7 @@ chunk_chars = 4000
 # roles = ["main"]           # main | subagent | fast
 # roles = ["candidate"]      # shadow-eval only; never live-routed
 # capabilities = []          # e.g. ["vision"], ["ocr"], ["embed"], ["audio"]
+# relaxed = []               # eval-gated scaffolds this backend no longer needs
 #
 # [cache]
 # enabled = true             # response cache for fast-role requests

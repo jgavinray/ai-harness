@@ -15,6 +15,8 @@ brief into the main conversation.
   back to `fast` and then any backend.
 - [x] Cache briefs by query hash and inject `## Research brief` into the system
   prompt; raw retrieval is not injected.
+- [x] Merge a durable `research <query-hash>` fact into project memory when
+  memory is enabled, so repeated questions can reuse the prior brief.
 - [x] Report `research_briefs` in request/eval metrics.
 - [x] Add server tests for generation, caching, and prompt injection.
 
@@ -30,6 +32,6 @@ Run:
 Observed:
 
 ```text
-6 passed
-175 passed
+focused research tests passed
+185 passed
 ```

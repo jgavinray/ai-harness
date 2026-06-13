@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import lora_train  # noqa: E402
 import promote_candidate  # noqa: E402
+import relax_scaffold  # noqa: E402
 import shadow_eval  # noqa: E402
 
 
@@ -45,3 +46,18 @@ def test_lora_train_command():
         "mlx_lm.lora", "--model", "base-model", "--train",
         "--data", "corpus.jsonl", "--adapter-path", "adapters/out",
     ]
+
+
+def test_relax_scaffold_gate_and_config_edit(tmp_path):
+    results = tmp_path / "results.jsonl"
+    results.write_text("\n".join(json.dumps(r) for r in [
+        {"model": "m", "invalid_calls": 0},
+        {"model": "m", "invalid_calls": 0},
+    ]))
+    assert relax_scaffold.can_relax(results, "m", "invalid_calls", 0.0)
+    cfg = tmp_path / "harness.toml"
+    cfg.write_text(
+        '[[backends]]\nname = "m"\nbase_url = "http://m/v1"\nmodel = "m"\nroles = ["main"]\n'
+    )
+    relax_scaffold.relax_config(cfg, "m", "guard_edit_without_read")
+    assert 'relaxed = ["guard_edit_without_read"]' in cfg.read_text()

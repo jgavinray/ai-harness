@@ -321,6 +321,64 @@ async def test_done_claim_after_edit_requires_verification():
     assert metrics["guard_fires"]["verify_after_edit"] == 1
 
 
+def conv_with_plan(system_status: str) -> Conversation:
+    return Conversation(
+        "sys\n\n## Execution plan\n1. Inspect\n2. Run tests\n3. Finish\n" + system_status,
+        (
+            Turn("user", (TextPart("continue"),)),
+            Turn("assistant", (ToolCallPart("r1", "Read", {"file_path": "/x"}),)),
+            Turn("user", (ToolResultPart("r1", "contents"),)),
+        ),
+        (
+            ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA),
+            ToolDef("Edit", "edits", EDIT_SCHEMA, EDIT_SCHEMA),
+            ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA),
+        ),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_plan_done_claim_before_final_step_is_drift():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
+    s = Settings()
+    s.planning.enabled = True
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_plan("Plan status: Step 2/3: Run tests; done: 1✓"),
+            get_profile("qwen"), backend, s, metrics,
+        )
+    ]
+    assert TextDelta("done") not in evs
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["guard_fires"]["plan_drift"] == 1
+
+
+async def test_edit_during_verify_plan_step_is_drift():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
+    s = Settings()
+    s.planning.enabled = True
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_plan("Plan status: Step 2/3: Run tests; done: 1✓"),
+            get_profile("qwen"), backend, s, metrics,
+        )
+    ]
+    assert not any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["guard_fires"]["plan_drift"] == 1
+
+
 async def test_skill_call_injects_compiled_procedure(tmp_path):
     skills = tmp_path / "skills"
     cache = tmp_path / "cache"

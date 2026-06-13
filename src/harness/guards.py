@@ -1,18 +1,15 @@
-"""Deterministic workflow guards over conversation history.
-
-Guards return feedback instead of making policy calls through a model. The
-relay owns retry mechanics; this module only decides whether a turn should be
-nudged and what the nudge should say.
-"""
+"""Deterministic workflow guards over conversation history."""
 
 from __future__ import annotations
 
 from harness.config import Settings
 from harness.ir import Conversation, ToolCall, ToolCallPart
+from harness.planning import plan_status
 
 EDIT_TOOLS = {"Edit", "MultiEdit"}
 VERIFY_WORDS = ("pytest", "test", "check", "npm test", "cargo test", "go test")
 DONE_WORDS = ("done", "fixed", "complete", "completed", "implemented", "finished")
+VERIFY_STEP_WORDS = ("verify", "test", "check", "run")
 
 
 def guard_metrics(metrics: dict) -> dict:
@@ -32,7 +29,6 @@ def _file_arg(call: ToolCall | ToolCallPart) -> str:
     value = call.arguments.get("file_path") or call.arguments.get("path") or ""
     return str(value)
 
-
 def _read_files(conv: Conversation) -> set[str]:
     out: set[str] = set()
     for turn in conv.turns:
@@ -43,11 +39,9 @@ def _read_files(conv: Conversation) -> set[str]:
                     out.add(path)
     return out
 
-
 def is_verification_command(command: str) -> bool:
     lowered = command.lower()
     return any(word in lowered for word in VERIFY_WORDS)
-
 
 def has_unverified_edit(conv: Conversation) -> bool:
     edited = False
@@ -63,11 +57,9 @@ def has_unverified_edit(conv: Conversation) -> bool:
                 edited = False
     return edited
 
-
 def _done_claim(text: str) -> bool:
     lowered = text.lower()
     return any(word in lowered for word in DONE_WORDS)
-
 
 def guard_tool_call(
     conv: Conversation, call: ToolCall, settings: Settings
@@ -85,14 +77,32 @@ def guard_tool_call(
             "edit_without_read",
             f"Read {path!r} before editing it, then retry the edit with the exact current text.",
         )
+    plan = plan_status(conv.system)
+    if (
+        settings.planning.enabled
+        and plan is not None
+        and call.name in EDIT_TOOLS | {"Write"}
+        and _is_verify_step(plan[2])
+    ):
+        return (
+            "plan_drift",
+            f"The current plan step is verification: {plan[2]!r}. "
+            "Run the verification step before making more edits unless verification fails.",
+        )
     return None
-
 
 def guard_done_claim(
     conv: Conversation, text: str, settings: Settings
 ) -> tuple[str, str] | None:
     if not settings.pipeline.workflow_guards or not settings.pipeline.guard_verify_after_edit:
         return None
+    plan = plan_status(conv.system)
+    if settings.planning.enabled and plan is not None and _done_claim(text) and plan[0] < plan[1]:
+        return (
+            "plan_drift",
+            f"The plan still has open steps: currently step {plan[0]}/{plan[1]} ({plan[2]}). "
+            "Continue with the next planned action instead of claiming completion.",
+        )
     if has_unverified_edit(conv) and _done_claim(text):
         return (
             "verify_after_edit",
@@ -100,3 +110,7 @@ def guard_done_claim(
             "Run a verification command now; only claim completion after it passes.",
         )
     return None
+
+def _is_verify_step(step: str) -> bool:
+    lowered = step.lower()
+    return any(word in lowered for word in VERIFY_STEP_WORDS)

@@ -104,3 +104,12 @@ def _status_line(steps: tuple[str, ...], conv: Conversation) -> str:
     current = min(calls + 1, len(steps))
     done = "none" if calls == 0 else " ".join(f"{i}✓" for i in range(1, current))
     return f"Plan status: Step {current}/{len(steps)}: {steps[current - 1]}; done: {done}"
+
+
+def plan_status(system: str) -> tuple[int, int, str] | None:
+    import re
+
+    match = re.search(r"Plan status: Step (\d+)/(\d+): ([^;\n]+)", system)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)), match.group(3)

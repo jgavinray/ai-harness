@@ -16,6 +16,8 @@ is an auditable config change.
   success rates and update backend roles only when the gate passes.
 - [x] Add `scripts/lora_train.py` as a LoRA training job scaffold over the gated
   corpus produced by `scripts/corpus.py`.
+- [x] Add `scripts/relax_scaffold.py` to apply eval-gated backend
+  `relaxed = [...]` config edits for guard/scaffold relaxation.
 - [x] Document candidate roles in `harness.toml.example`.
 - [x] Add routing and script tests.
 
@@ -31,6 +33,6 @@ Run:
 Observed:
 
 ```text
-30 passed
-180 passed
+22 focused tests passed
+185 passed
 ```

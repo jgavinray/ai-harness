@@ -29,6 +29,7 @@ class PoolBackendCfg(BackendCfg):
     context_window: int = 32768
     roles: list[str] = ["main", "subagent", "fast"]
     capabilities: list[str] = []
+    relaxed: list[str] = []  # eval-gated scaffolds this backend no longer needs
     # Concurrency the *hardware* sustains, not what the engine accepts;
     # None = unlimited. A backend at this limit is skipped during routing.
     max_in_flight: int | None = None

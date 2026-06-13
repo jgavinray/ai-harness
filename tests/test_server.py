@@ -269,6 +269,33 @@ async def test_research_brief_generated_cached_and_injected(tmp_path):
     assert "## Research brief" in fake.requests[2]["messages"][0]["content"]
 
 
+async def test_research_brief_records_project_memory_fact(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("The durable fact is pytest -q.")
+    fake = FakeOpenAI()
+    fake.push([text_chunk("- Use pytest -q for verification"), finish_chunk("stop")])
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.research.enabled = True
+    settings.research.cache_dir = str(tmp_path / "research-cache")
+    settings.memory.enabled = True
+    settings.memory.dir = str(tmp_path / "memory")
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False)
+    body["system"] = "Working directory: /repo"
+    body["messages"] = [{"role": "user", "content": f"research: file://{source}\nUse it."}]
+    async with client:
+        assert (await client.post("/v1/messages", json=body)).status_code == 200
+    mem = (tmp_path / "memory" / "repo.md").read_text()
+    assert "research " in mem
+    assert "Use pytest -q" in mem
+
+
 def _fleet_toml(roles: str) -> str:
     return (
         '[[backends]]\nname = "alpha"\nbase_url = "http://fake/v1"\n'

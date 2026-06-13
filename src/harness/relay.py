@@ -157,7 +157,10 @@ async def run(
         buffer_text = (
             settings.pipeline.workflow_guards
             and settings.pipeline.guard_verify_after_edit
-            and has_unverified_edit(conv)
+            and (
+                has_unverified_edit(conv)
+                or (settings.planning.enabled and "Plan status: Step" in conv.system)
+            )
         )
 
         async for ev in profile.parse(backend.stream(payload)):

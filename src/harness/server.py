@@ -29,9 +29,9 @@ from harness.codec.anthropic_out import collect, error_body, error_sse, stream_s
 from harness.config import Settings, load_settings
 from harness.ir import Done
 from harness.log import RequestLogger
-from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens
+from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
 from harness.planning import PlanningManager
-from harness.research import ResearchManager
+from harness.research import ResearchManager, memory_fact
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -282,6 +282,9 @@ def create_app(
         if role == "main":
             try:
                 brief = await research.ensure(conv, pool, metrics)
+                fact = memory_fact(conv, brief or "")
+                if fact and settings.memory.enabled:
+                    memory.merge(project_key(conv.system), fact)
                 conv = research.inject(conv, brief)
                 rendered = chosen.profile.render(conv, chosen.model_name)
                 _dump(settings, "rendered-payload", rendered)

@@ -20,6 +20,9 @@ plan/status scaffold at a stable system-prompt position.
   and continue without wedging the request.
 - [x] Wire `plan_drift` into request metrics and eval reporting so future drift
   detectors have a stable counter.
+- [x] Add mechanical drift guards: completion claims before the final plan step
+  and edits during an explicit verification step produce relay feedback and
+  increment `guard_fires.plan_drift`.
 - [x] Add server tests proving the plan is generated once, cached, and injected
   into executor prompts.
 
@@ -35,6 +38,6 @@ Run:
 Observed:
 
 ```text
-6 passed
-167 passed
+4 focused planning/drift tests passed
+185 passed
 ```
