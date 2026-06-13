@@ -66,7 +66,8 @@ class Conversation:
     tools: tuple[ToolDef, ...]
     params: GenParams
     # full client inventory; `tools` above is the surfaced subset whose
-    # schemas the model sees. Empty when pruning is disabled.
+    # schemas the model sees. Empty when pruning is disabled — safe, because
+    # then every tool is already in `tools` and nothing needs surfacing.
     all_tools: tuple[ToolDef, ...] = ()
 
 

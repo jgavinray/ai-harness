@@ -47,6 +47,7 @@ def test_toggle_off_identity():
     s.pipeline.tool_prune = False
     out = ToolPruneStage().apply(conv(), s)
     assert len(out.tools) == len(ALL_TOOLS)
+    assert out.all_tools == ()  # prune off: everything surfaced, nothing hidden
 
 
 def test_all_tools_records_full_inventory():
@@ -54,4 +55,5 @@ def test_all_tools_records_full_inventory():
     # record the full inventory before cutting the surfaced set.
     out = ToolPruneStage().apply(conv(), Settings())
     assert out.all_tools == ALL_TOOLS
-    assert len(out.tools) < len(out.all_tools)
+    assert len(out.tools) == Settings().pipeline.max_tools
+    assert len(out.all_tools) == len(ALL_TOOLS)
