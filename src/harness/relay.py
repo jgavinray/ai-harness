@@ -80,6 +80,18 @@ def _append_feedback(conv: Conversation, bad: ToolCall, error: str) -> Conversat
     return replace(conv, turns=turns)
 
 
+def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
+    """The model called a catalogued tool whose schema is not surfaced.
+    Returns conv with the real ToolDef added (so validation, feedback,
+    and constrained retries all see it), or None if the name is unknown."""
+    if any(t.name == name for t in conv.tools):
+        return None
+    tool = next((t for t in conv.all_tools if t.name == name), None)
+    if tool is None:
+        return None
+    return replace(conv, tools=conv.tools + (tool,))
+
+
 async def run(
     conv: Conversation,
     profile: Profile,
@@ -94,6 +106,7 @@ async def run(
     m.setdefault("invalid_calls", 0)
     m.setdefault("degenerate_aborts", 0)
     m.setdefault("loop_breaks", 0)
+    m.setdefault("tool_surfaced", 0)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
@@ -125,6 +138,12 @@ async def run(
                 yield ev
             elif isinstance(ev, ToolCall):
                 fixed, error = repair_toolcall(ev, conv.tools)
+                if fixed is None:
+                    surfaced = _surface_tool(conv, ev.name)
+                    if surfaced is not None:
+                        conv = surfaced
+                        m["tool_surfaced"] += 1
+                        fixed, error = repair_toolcall(ev, conv.tools)
                 if fixed is not None:
                     seen = _repeat_count(conv, fixed)
                     if seen >= LOOP_THRESHOLD and attempts < settings.pipeline.repair_retries:

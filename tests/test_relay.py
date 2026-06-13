@@ -145,3 +145,37 @@ async def test_two_prior_repeats_pass_through():
     evs = [e async for e in run(conv_with_repeats(2), get_profile("qwen"), backend, Settings())]
     assert any(isinstance(e, ToolCall) for e in evs)
     assert len(fake.requests) == 1
+
+
+WEB_SCHEMA = {
+    "type": "object",
+    "properties": {"url": {"type": "string"}},
+    "required": ["url"],
+}
+
+
+def conv_with_hidden_tool() -> Conversation:
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    web = ToolDef("WebFetch", "fetches a url", WEB_SCHEMA, WEB_SCHEMA)
+    return Conversation(
+        "sys",
+        (Turn("user", (TextPart("fetch x"),)),),
+        (read,),                      # only Read is surfaced
+        GenParams(max_tokens=512, stream=True),
+        all_tools=(read, web),        # WebFetch is catalog-only
+    )
+
+
+async def test_hidden_tool_valid_call_passes_through():
+    # Model called a catalogued-but-unsurfaced tool with valid args:
+    # zero-cost path, no retry round-trip.
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c1", "WebFetch", '{"url": "https://x"}'),
+               finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv_with_hidden_tool(), get_profile("qwen"),
+                                backend, Settings(), metrics=metrics)]
+    assert any(isinstance(e, ToolCall) and e.name == "WebFetch" for e in evs)
+    assert len(fake.requests) == 1
+    assert metrics["tool_surfaced"] == 1
