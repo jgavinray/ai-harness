@@ -186,3 +186,22 @@ def test_called_hidden_tool_stays_surfaced_next_request():
         Settings(),
     )
     assert "mcp__slack__send_message" in {t.name for t in out.tools}
+
+
+def test_named_tools_soft_cap_when_history_full():
+    # 7 history-called tools + a 2-tool server alias: both named tools must
+    # surface (soft cap) instead of silently losing the second one, and the
+    # called-tool prefix order stays untouched (append-at-end only).
+    used = ("Read", "Edit", "Write", "Bash", "Grep", "Glob", "WebFetch")
+    turns = tuple(
+        Turn("assistant", (ToolCallPart(f"t{i}", n, {}),)) for i, n in enumerate(used)
+    ) + (Turn("user", (TextPart("use the github mcp to open a PR"),)),)
+    out = ToolPruneStage().apply(
+        Conversation("s", turns, ALL_TOOLS + MCP_TOOLS, GenParams(max_tokens=100)),
+        Settings(),
+    )
+    names = [t.name for t in out.tools]
+    assert "mcp__github__create_pr" in names
+    assert "mcp__github__list_issues" in names
+    assert names[:7] == list(used)  # called prefix order untouched
+    assert len(names) == 9          # 7 called + 1 named in cap + 1 soft-capped

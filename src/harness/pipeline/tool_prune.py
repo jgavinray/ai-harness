@@ -77,13 +77,21 @@ class ToolPruneStage:
                 if isinstance(part, ToolCallPart) and part.name not in called:
                     called.append(part.name)
 
+        named = _named_tools(conv)
         by_name = {t.name: t for t in conv.tools}
         keep: list[str] = []
-        for name in (*called, *_named_tools(conv), *CORE, *by_name):
+        for name in (*called, *named, *CORE, *by_name):
             if name in by_name and name not in keep:
                 keep.append(name)
             if len(keep) >= settings.pipeline.max_tools:
                 break
+        # Soft cap: user-named tools always surface, appended at the END so
+        # the called-tool prefix stays byte-stable. Bounded by max_tools so
+        # a huge server alias can at worst double the list, and the set
+        # shrinks back once a later user message stops naming them.
+        for name in named[: settings.pipeline.max_tools]:
+            if name in by_name and name not in keep:
+                keep.append(name)
         system = conv.system
         if settings.pipeline.tool_catalog:
             system = system + "\n\n" + _catalog(conv.tools)
