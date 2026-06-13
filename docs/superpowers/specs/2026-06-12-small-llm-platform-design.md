@@ -32,6 +32,10 @@ Two reinforcing loops make this durable:
    cached prefill) and must earn its tokens. Per-turn injection of varying content
    is forbidden on the hot path: it rewrites the prefix and forces a full re-prefill
    (measured cost on this fleet: ~20–60 s at 60k tokens).
+   Corollary — **spend cheap resources to save scarce ones:** disk and CPU are
+   comfortably managed; GPU time and model tokens are the finite resources. Offline
+   jobs (skill compiling, memory distilling, corpus building, observability) may be
+   disk/CPU-extravagant whenever that saves model tokens on the hot path.
 3. **No capability ships without an eval delta.** `evals/` gates everything,
    including model adoption.
 4. **Small surface is longevity.** One Python process, jsonl artifacts, TOML
