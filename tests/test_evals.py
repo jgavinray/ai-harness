@@ -44,11 +44,13 @@ def test_report_aggregation(tmp_path):
          "valid_calls": 8, "invalid_calls": 0, "repaired_calls": 1, "retries": 1,
          "tool_surfaced": 2, "guard_fires": 1,
          "plan_drift": 0,
+         "capability_fallbacks": 0,
          "input_tokens": 1000, "output_tokens": 100, "session_wall_s": 30},
         {"model": "m", "config": "full", "success": False, "timed_out": True,
          "valid_calls": 2, "invalid_calls": 2, "repaired_calls": 0, "retries": 2,
          "tool_surfaced": 0, "guard_fires": 3,
          "plan_drift": 2,
+         "capability_fallbacks": 2,
          "input_tokens": 500, "output_tokens": 50, "session_wall_s": 300},
     ]
     p = tmp_path / "results.jsonl"
@@ -62,6 +64,7 @@ def test_report_aggregation(tmp_path):
     assert m["tool_surfaced_per_session"] == 1.0
     assert m["guard_fires_per_session"] == 2.0
     assert m["plan_drift_per_session"] == 1.0
+    assert m["capability_fallbacks_per_session"] == 1.0
     md = eval_report.markdown(agg)
     assert "| m | full |" in md
 

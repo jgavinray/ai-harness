@@ -4,7 +4,7 @@ import pytest
 from harness.backends.base import BackendError
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import BackendCfg, PoolBackendCfg, Settings
-from harness.router import Router, session_key
+from harness.router import Router, request_capabilities, session_key
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
 
 
@@ -182,6 +182,26 @@ def test_request_role_haiku_fast():
 def test_request_role_unknown_defaults_main():
     from harness.router import request_role
     assert request_role({"model": "claude-opus-4-8", "system": "custom"}) == "main"
+
+
+def test_request_capabilities_detects_image_blocks():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "read this"},
+        {"type": "image", "source": {"type": "base64", "data": "abc"}},
+    ]}]}
+    assert request_capabilities(body) == {"vision"}
+
+
+def test_router_prefers_vision_backend_for_image_request():
+    s = fleet_settings()
+    s.backends[2].capabilities = ["vision"]
+    router = Router(make_pool(s), s)
+    body = {"model": "claude-opus-4-8", "system": "custom",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image", "source": {"type": "base64", "data": "abc"}},
+            ]}]}
+    assert router.pick(body).name == "gem"
 
 
 def test_router_routes_subagent_fingerprint_to_subagent_backend():

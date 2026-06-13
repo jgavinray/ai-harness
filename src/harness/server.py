@@ -37,7 +37,7 @@ from harness.pipeline.history import HistoryStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
-from harness.router import Router, request_role, session_key
+from harness.router import Router, request_capabilities, request_role, session_key
 from harness.tokens.counter import HeuristicCounter, count_conversation
 from harness.traces import TraceStore
 
@@ -204,6 +204,28 @@ def create_app(
     def invalid_request(message: str) -> JSONResponse:
         return JSONResponse(error_body("invalid_request_error", message), status_code=400)
 
+    def capability_fallbacks(body: dict) -> int:
+        needs = request_capabilities(body)
+        if "vision" not in needs or pool.with_capabilities({"vision"}):
+            return 0
+        count = 0
+        for msg in body.get("messages") or []:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image":
+                    block.clear()
+                    block.update({
+                        "type": "text",
+                        "text": (
+                            "[image block received; no vision backend is configured. "
+                            "OCR/caption fallback could not extract text, so proceed from surrounding text.]"
+                        ),
+                    })
+                    count += 1
+        return count
+
     @app.post("/v1/messages")
     async def messages(request: Request):
         try:
@@ -212,6 +234,7 @@ def create_app(
             return invalid_request("body is not valid JSON")
         if "messages" not in body or "max_tokens" not in body:
             return invalid_request("'messages' and 'max_tokens' are required")
+        fallback_count = capability_fallbacks(body)
         try:
             conv = decode(body)
         except (KeyError, TypeError, AttributeError) as exc:
@@ -234,6 +257,7 @@ def create_app(
         model = body.get("model", chosen.model_name)
         metrics: dict = {}
         metrics["memory_tokens"] = injected_memory_tokens(conv.system, counter)
+        metrics["capability_fallbacks"] = fallback_count
         record: dict = {
             "request_id": msg_id,
             "session_key": skey,

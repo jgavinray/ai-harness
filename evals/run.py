@@ -55,7 +55,7 @@ def aggregate_log(log_path: Path) -> dict:
         "requests": 0, "input_tokens": 0, "output_tokens": 0, "retries": 0,
         "repaired_calls": 0, "valid_calls": 0, "invalid_calls": 0,
         "degenerate_aborts": 0, "tool_surfaced": 0, "guard_fires": 0,
-        "plan_drift": 0, "wall_ms": 0,
+        "plan_drift": 0, "capability_fallbacks": 0, "wall_ms": 0,
     }
     if not log_path.exists():
         return agg

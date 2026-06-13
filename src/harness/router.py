@@ -81,6 +81,18 @@ def request_role(body: dict) -> str:
     return "main"
 
 
+def request_capabilities(body: dict) -> set[str]:
+    needs: set[str] = set()
+    for msg in body.get("messages") or []:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "image":
+                needs.add("vision")
+    return needs
+
+
 class Router:
     def __init__(self, pool: BackendPool, settings: Settings) -> None:
         self.pool = pool
@@ -104,7 +116,15 @@ class Router:
                 return backend
 
         role = request_role(body)
-        candidates = [b for b in self.pool.with_role(role) if not b.at_capacity]
+        needs = request_capabilities(body)
+        if needs:
+            capable = [b for b in self.pool.with_capabilities(needs) if not b.at_capacity]
+            if capable:
+                candidates = capable
+            else:
+                candidates = [b for b in self.pool.with_role(role) if not b.at_capacity]
+        else:
+            candidates = [b for b in self.pool.with_role(role) if not b.at_capacity]
         # Hosts whose hardware is already grinding on this role's traffic:
         # overflowing onto a sibling backend there (two servers, one box)
         # adds prefill load to the same GPU instead of adding capacity.

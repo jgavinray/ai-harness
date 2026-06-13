@@ -108,6 +108,7 @@ def _fleet_from(settings: Settings) -> list[PoolBackendCfg]:
             profile=settings.profile.name,
             context_window=settings.profile.context_window,
             roles=["main", "subagent", "fast"],
+            capabilities=[],
         )
     ]
 
@@ -150,6 +151,12 @@ class BackendPool:
         return [
             b for b in self.backends
             if role in b.roles and (include_down or not b.is_down())
+        ]
+
+    def with_capabilities(self, needs: set[str]) -> list[PooledBackend]:
+        return [
+            b for b in self.backends
+            if needs.issubset(set(b.cfg.capabilities)) and not b.is_down()
         ]
 
     async def stream(self, b: PooledBackend, payload: dict[str, Any]) -> AsyncIterator[dict]:

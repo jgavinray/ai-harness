@@ -15,7 +15,7 @@ never execute a stale plan without re-reading the files it names.**
 | 4 | Planning scaffold (④) | `2026-06-12-planning-scaffold.md` | **done 2026-06-13** |
 | 5 | Project memory (⑤) | `2026-06-12-project-memory.md` | **done 2026-06-13** |
 | 6 | Skill compiler (②) | `2026-06-12-skill-compiler.md` | **done 2026-06-13** |
-| 7 | Capability routing + OCR fallback (⑧) | `(to write)` | — |
+| 7 | Capability routing + OCR fallback (⑧) | `2026-06-12-capability-routing.md` | **done 2026-06-13** |
 | 8 | Research pipeline (③) | `(to write)` | — |
 | 9 | Growth loop + candidate adoption (⑦) | `(to write)` | — |
 

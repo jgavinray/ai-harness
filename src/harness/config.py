@@ -28,6 +28,7 @@ class PoolBackendCfg(BackendCfg):
     profile: str = "qwen"
     context_window: int = 32768
     roles: list[str] = ["main", "subagent", "fast"]
+    capabilities: list[str] = []
     # Concurrency the *hardware* sustains, not what the engine accepts;
     # None = unlimited. A backend at this limit is skipped during routing.
     max_in_flight: int | None = None

@@ -67,3 +67,22 @@ async def test_request_log_records_memory_tokens(tmp_path):
     assert resp.status_code == 200
     rec = json.loads(log.read_text().strip())
     assert rec["memory_tokens"] > 0
+
+
+async def test_image_request_uses_text_fallback_without_vision_backend(tmp_path):
+    log = tmp_path / "requests.jsonl"
+    settings = Settings()
+    settings.log.requests_path = str(log)
+    fake = FakeOpenAI()
+    fake.push([text_chunk("hi"), finish_chunk("stop")])
+    body = request_body(stream=False)
+    body["messages"] = [{"role": "user", "content": [
+        {"type": "text", "text": "what is shown?"},
+        {"type": "image", "source": {"type": "base64", "data": "abc"}},
+    ]}]
+    resp = await post(settings, fake, body)
+    assert resp.status_code == 200
+    sent = json.dumps(fake.requests[0])
+    assert "no vision backend is configured" in sent
+    rec = json.loads(log.read_text().strip())
+    assert rec["capability_fallbacks"] == 1

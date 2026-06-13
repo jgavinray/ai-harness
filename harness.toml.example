@@ -51,6 +51,7 @@ max_tokens = 400
 # profile = "qwen"           # qwen | deepseek_r1 | devstral | gemma
 # context_window = 131072
 # roles = ["main"]           # main | subagent | fast
+# capabilities = []          # e.g. ["vision"], ["ocr"], ["embed"], ["audio"]
 #
 # [cache]
 # enabled = true             # response cache for fast-role requests
