@@ -36,6 +36,7 @@ class PoolBackendCfg(BackendCfg):
 class PipelineCfg(BaseModel):
     system_prompt: str = "replace"  # replace | compress | passthrough
     tool_prune: bool = True
+    tool_catalog: bool = True  # list the full tool inventory in the system prompt
     max_tools: int = 8
     fewshot: bool = True
     repair_retries: int = 2

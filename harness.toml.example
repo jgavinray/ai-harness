@@ -17,6 +17,7 @@ context_window = 32768
 [pipeline]
 system_prompt = "replace"  # replace | compress | passthrough
 tool_prune = true
+tool_catalog = true        # list every tool (1 line each) so the model can call hidden ones
 max_tools = 8
 fewshot = true
 repair_retries = 2

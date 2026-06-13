@@ -45,6 +45,24 @@ def _named_tools(conv: Conversation) -> list[str]:
     return named
 
 
+CATALOG_HEADER = (
+    "## Tool catalog\n"
+    "You may call ANY tool below by name, even if its full schema is not "
+    "provided; the schema will be supplied when you use it."
+)
+
+
+def _summary(description: str) -> str:
+    first = description.strip().split("\n", 1)[0]
+    first = first.split(". ", 1)[0].rstrip(".")
+    return first[:80]
+
+
+def _catalog(tools: tuple) -> str:
+    lines = [f"- {t.name} — {_summary(t.description)}" for t in tools]
+    return CATALOG_HEADER + "\n" + "\n".join(lines)
+
+
 CORE = ("Read", "Edit", "Write", "Bash", "Grep", "Glob", "TodoWrite", "Task")
 
 
@@ -66,6 +84,12 @@ class ToolPruneStage:
                 keep.append(name)
             if len(keep) >= settings.pipeline.max_tools:
                 break
+        system = conv.system
+        if settings.pipeline.tool_catalog:
+            system = system + "\n\n" + _catalog(conv.tools)
         return replace(
-            conv, tools=tuple(by_name[n] for n in keep), all_tools=conv.tools
+            conv,
+            tools=tuple(by_name[n] for n in keep),
+            all_tools=conv.tools,
+            system=system,
         )

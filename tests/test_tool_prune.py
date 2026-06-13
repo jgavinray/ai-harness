@@ -129,3 +129,41 @@ def test_tool_results_do_not_trigger_matching():
         Settings(),
     )
     assert "mcp__slack__send_message" not in {t.name for t in out.tools}
+
+
+def test_catalog_lists_full_inventory():
+    out = ToolPruneStage().apply(conv(), Settings())
+    assert "## Tool catalog" in out.system
+    for t in ALL_TOOLS:
+        assert f"- {t.name} " in out.system
+
+
+def test_catalog_byte_stable_across_turns():
+    # The catalog is part of the prompt prefix; if it varies between turns
+    # the KV cache is invalidated every request. It must not depend on
+    # which tools are currently surfaced.
+    early = ToolPruneStage().apply(conv(), Settings())
+    later_turns = (
+        Turn("assistant", (ToolCallPart("t1", "WebFetch", {"url": "u"}),)),
+        Turn("user", (TextPart("ok"),)),
+    )
+    later = ToolPruneStage().apply(conv(later_turns), Settings())
+    catalog = lambda c: c.system.split("## Tool catalog", 1)[1]
+    assert catalog(early) == catalog(later)
+
+
+def test_catalog_disabled_by_flag():
+    s = Settings()
+    s.pipeline.tool_catalog = False
+    out = ToolPruneStage().apply(conv(), s)
+    assert "## Tool catalog" not in out.system
+
+
+def test_catalog_summaries_are_short():
+    long_desc = ToolDef("Verbose", "First sentence stays. " + "x" * 500,
+                        {"type": "object"}, {"type": "object"})
+    c = Conversation("s", (), ALL_TOOLS + (long_desc,), GenParams(max_tokens=100))
+    out = ToolPruneStage().apply(c, Settings())
+    line = next(l for l in out.system.splitlines() if l.startswith("- Verbose"))
+    assert len(line) <= 100
+    assert "First sentence stays" in line
