@@ -77,3 +77,55 @@ def test_all_tools_records_full_inventory():
     assert out.all_tools == ALL_TOOLS
     assert len(out.tools) == Settings().pipeline.max_tools
     assert len(out.all_tools) == len(ALL_TOOLS)
+
+
+MCP_TOOLS = tuple(
+    tool(n) for n in ("mcp__github__create_pr", "mcp__github__list_issues",
+                      "mcp__slack__send_message", "Skill")
+)
+
+
+def conv_mcp(text: str) -> Conversation:
+    return Conversation(
+        "s",
+        (Turn("user", (TextPart(text),)),),
+        ALL_TOOLS + MCP_TOOLS,
+        GenParams(max_tokens=100),
+    )
+
+
+def test_named_mcp_server_surfaces_its_tools():
+    # Regression for the CORE deadlock: CORE is 8 names, max_tools is 8,
+    # so an MCP tool could never be surfaced no matter what the user said.
+    out = ToolPruneStage().apply(conv_mcp("use the github mcp to open a PR"), Settings())
+    names = {t.name for t in out.tools}
+    assert "mcp__github__create_pr" in names
+    assert "mcp__github__list_issues" in names
+    assert "mcp__slack__send_message" not in names
+    assert len(out.tools) <= Settings().pipeline.max_tools
+
+
+def test_exact_tool_name_surfaces_tool():
+    out = ToolPruneStage().apply(conv_mcp("call mcp__slack__send_message please"), Settings())
+    assert "mcp__slack__send_message" in {t.name for t in out.tools}
+
+
+def test_skill_mention_surfaces_skill_tool():
+    out = ToolPruneStage().apply(conv_mcp("run the brainstorming skill"), Settings())
+    assert "Skill" in {t.name for t in out.tools}
+
+
+def test_tool_results_do_not_trigger_matching():
+    # File contents flowing back through tool results must not surface
+    # tools; only the user's own words count.
+    from harness.ir import ToolResultPart
+    turns = (
+        Turn("user", (TextPart("fix the bug"),)),
+        Turn("assistant", (ToolCallPart("t1", "Read", {"file_path": "/x"}),)),
+        Turn("user", (ToolResultPart("t1", "docs mention mcp__slack__send_message here"),)),
+    )
+    out = ToolPruneStage().apply(
+        Conversation("s", turns, ALL_TOOLS + MCP_TOOLS, GenParams(max_tokens=100)),
+        Settings(),
+    )
+    assert "mcp__slack__send_message" not in {t.name for t in out.tools}

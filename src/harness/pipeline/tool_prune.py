@@ -6,10 +6,44 @@ KV-prefix stability), then the core set, then everything else.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from harness.config import Settings
-from harness.ir import Conversation, ToolCallPart
+from harness.ir import Conversation, TextPart, ToolCallPart
+
+
+def _last_user_text(conv: Conversation) -> str:
+    """The newest user turn that contains actual user words (TextPart).
+    Tool-result-only turns are skipped so file contents can't trigger
+    matches, and the match stays stable until the user speaks again."""
+    for turn in reversed(conv.turns):
+        if turn.role != "user":
+            continue
+        texts = [p.text for p in turn.parts if isinstance(p, TextPart)]
+        if texts:
+            return "\n".join(texts).lower()
+    return ""
+
+
+def _mentioned(word: str, text: str) -> bool:
+    return re.search(rf"\b{re.escape(word.lower())}s?\b", text) is not None
+
+
+def _named_tools(conv: Conversation) -> list[str]:
+    text = _last_user_text(conv)
+    if not text:
+        return []
+    named: list[str] = []
+    for t in conv.tools:
+        if _mentioned(t.name, text):
+            named.append(t.name)
+        elif t.name.startswith("mcp__"):
+            server = t.name.split("__")[1]
+            if _mentioned(server, text):
+                named.append(t.name)
+    return named
+
 
 CORE = ("Read", "Edit", "Write", "Bash", "Grep", "Glob", "TodoWrite", "Task")
 
@@ -27,7 +61,7 @@ class ToolPruneStage:
 
         by_name = {t.name: t for t in conv.tools}
         keep: list[str] = []
-        for name in (*called, *CORE, *by_name):
+        for name in (*called, *_named_tools(conv), *CORE, *by_name):
             if name in by_name and name not in keep:
                 keep.append(name)
             if len(keep) >= settings.pipeline.max_tools:
