@@ -19,6 +19,7 @@ from typing import Awaitable, Callable
 
 from harness.config import Settings
 from harness.ir import Conversation
+from harness.tokens.counter import TokenCounter
 
 HEADER = "## Project memory (from previous sessions)"
 
@@ -117,3 +118,9 @@ class MemoryStage:
         if not mem:
             return conv
         return replace(conv, system=f"{conv.system}\n\n{HEADER}\n{mem}")
+
+
+def injected_memory_tokens(system: str, counter: TokenCounter) -> int:
+    if HEADER not in system:
+        return 0
+    return counter.count_text(system.split(HEADER, 1)[1])

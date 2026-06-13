@@ -29,7 +29,7 @@ from harness.codec.anthropic_out import collect, error_body, error_sse, stream_s
 from harness.config import Settings, load_settings
 from harness.ir import Done
 from harness.log import RequestLogger
-from harness.memory import MemoryManager, MemoryStage
+from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens
 from harness.planning import PlanningManager
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
@@ -233,6 +233,7 @@ def create_app(
         msg_id = "msg_" + uuid.uuid4().hex[:24]
         model = body.get("model", chosen.model_name)
         metrics: dict = {}
+        metrics["memory_tokens"] = injected_memory_tokens(conv.system, counter)
         record: dict = {
             "request_id": msg_id,
             "session_key": skey,

@@ -1,6 +1,14 @@
 from harness.config import Settings
 from harness.ir import Conversation, GenParams
-from harness.memory import HEADER, MemoryManager, MemoryStage, project_key
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import memory_distill  # noqa: E402
+
+from harness.memory import HEADER, MemoryManager, MemoryStage, injected_memory_tokens, project_key
+from harness.tokens.counter import HeuristicCounter
 
 
 def settings_with_memory(tmp_path, idle_s=0.0) -> Settings:
@@ -41,6 +49,7 @@ def test_stage_injects_memory(tmp_path):
     # idempotent
     again = MemoryStage(m, s).apply(out, s)
     assert again.system.count(HEADER) == 1
+    assert injected_memory_tokens(out.system, HeuristicCounter()) > 0
 
 
 def test_stage_noop_when_disabled(tmp_path):
@@ -83,3 +92,32 @@ async def test_sweep_survives_completer_failure(tmp_path):
     m.note("sess1", "Working directory: /repo", [{"role": "user", "content": "x"}])
     await m.sweep()  # must not raise
     assert m.read("repo") == ""
+
+
+def test_offline_distiller_writes_memory_from_clean_traces(tmp_path):
+    traces = tmp_path / "sessions.jsonl"
+    settings = settings_with_memory(tmp_path / "memory")
+    clean = {
+        "metrics": {"invalid_calls": 0, "retries": 0, "degenerate_aborts": 0},
+        "payload": {"messages": [
+            {"role": "system", "content": "Working directory: /repo"},
+            {"role": "user", "content": "fix it"},
+        ]},
+        "events": [
+            {"t": "tool_call", "name": "Bash", "arguments": {"command": "pytest -q"}},
+            {"t": "done", "stop_reason": "tool_use"},
+        ],
+    }
+    noisy = {
+        **clean,
+        "metrics": {"invalid_calls": 1, "retries": 0, "degenerate_aborts": 0},
+        "events": [
+            {"t": "tool_call", "name": "Bash", "arguments": {"command": "bad command"}}
+        ],
+    }
+    traces.write_text(json.dumps(clean) + "\n" + json.dumps(noisy) + "\nnot json\n")
+    projects, total = memory_distill.distill(traces, settings)
+    assert (projects, total) == (1, 3)
+    text = MemoryManager(settings, None).read("repo")
+    assert "- verified command: `pytest -q`" in text
+    assert "bad command" not in text

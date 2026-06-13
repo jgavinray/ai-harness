@@ -48,3 +48,22 @@ async def test_no_log_when_disabled(tmp_path):
     resp = await post(settings, fake, request_body(stream=False))
     assert resp.status_code == 200
     assert list(tmp_path.iterdir()) == []
+
+
+async def test_request_log_records_memory_tokens(tmp_path):
+    log = tmp_path / "requests.jsonl"
+    mem = tmp_path / "memory"
+    settings = Settings()
+    settings.log.requests_path = str(log)
+    settings.memory.enabled = True
+    settings.memory.dir = str(mem)
+    (mem).mkdir()
+    (mem / "repo.md").write_text("- use pytest -q\n")
+    fake = FakeOpenAI()
+    fake.push([text_chunk("hi"), finish_chunk("stop")])
+    body = request_body(stream=False)
+    body["system"] = "Working directory: /repo"
+    resp = await post(settings, fake, body)
+    assert resp.status_code == 200
+    rec = json.loads(log.read_text().strip())
+    assert rec["memory_tokens"] > 0
