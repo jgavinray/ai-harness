@@ -32,6 +32,7 @@ from harness.guards import (
     has_unverified_edit,
     increment_guard,
 )
+from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
@@ -95,6 +96,14 @@ def _append_guard_feedback(conv: Conversation, guard: str, message: str) -> Conv
     return replace(conv, turns=turns)
 
 
+def _append_skill_feedback(conv: Conversation, name: str, compiled: str) -> Conversation:
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[requested skill: {name}]"),)),
+        Turn("user", (TextPart(f"Compiled skill procedure for {name}:\n{compiled}"),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     """The model called a catalogued tool whose schema is not surfaced.
     Returns conv with the real ToolDef added (so validation, feedback,
@@ -122,10 +131,12 @@ async def run(
     m.setdefault("degenerate_aborts", 0)
     m.setdefault("loop_breaks", 0)
     m.setdefault("tool_surfaced", 0)
+    m.setdefault("skill_compiled", 0)
     guard_metrics(m)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
+    skill_compiler = SkillCompiler(settings, profile.name)
 
     model_name = getattr(backend, "model_name", settings.backend.model)
     while True:
@@ -141,6 +152,7 @@ async def run(
         emitted_valid_call = False
         guarded_call: tuple[str, str] | None = None
         guarded_done: tuple[str, str] | None = None
+        skill_feedback: tuple[str, str] | None = None
         buffered_text: list[str] = []
         buffer_text = (
             settings.pipeline.workflow_guards
@@ -172,6 +184,12 @@ async def run(
                         m["tool_surfaced"] += 1
                         fixed, error = repair_toolcall(ev, conv.tools)
                 if fixed is not None:
+                    if fixed.name == "Skill" and settings.skills.enabled:
+                        name = skill_name(fixed.arguments)
+                        compiled = skill_compiler.compile(name) if name else None
+                        if compiled and attempts < settings.pipeline.repair_retries:
+                            skill_feedback = (name, compiled)
+                            break
                     guard = guard_tool_call(conv, fixed, settings)
                     if guard is not None and attempts < settings.pipeline.repair_retries:
                         guarded_call = guard
@@ -220,6 +238,14 @@ async def run(
             increment_guard(m, guard)
             suppress_text = True
             conv = _append_guard_feedback(conv, guard, message)
+            continue
+
+        if skill_feedback is not None:
+            attempts += 1
+            name, compiled = skill_feedback
+            m["skill_compiled"] += 1
+            suppress_text = True
+            conv = _append_skill_feedback(conv, name, compiled)
             continue
 
         if guarded_done is not None:

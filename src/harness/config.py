@@ -75,6 +75,13 @@ class PlanningCfg(BaseModel):
     max_chars: int = 4000
 
 
+class SkillsCfg(BaseModel):
+    enabled: bool = False
+    dir: str = "~/.codex/skills"
+    cache_dir: str = "~/.ai-harness/compiled-skills"
+    max_tokens: int = 400
+
+
 class CacheCfg(BaseModel):
     enabled: bool = True
     ttl_s: float = 600.0
@@ -94,6 +101,7 @@ class Settings(BaseModel):
     traces: TracesCfg = TracesCfg()
     memory: MemoryCfg = MemoryCfg()
     planning: PlanningCfg = PlanningCfg()
+    skills: SkillsCfg = SkillsCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

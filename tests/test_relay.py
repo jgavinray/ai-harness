@@ -37,6 +37,11 @@ BASH_SCHEMA = {
     "properties": {"command": {"type": "string"}},
     "required": ["command"],
 }
+SKILL_SCHEMA = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}},
+    "required": ["name"],
+}
 
 
 def conv() -> Conversation:
@@ -314,3 +319,33 @@ async def test_done_claim_after_edit_requires_verification():
     assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
     assert "have not run a relevant test" in str(fake.requests[1])
     assert metrics["guard_fires"]["verify_after_edit"] == 1
+
+
+async def test_skill_call_injects_compiled_procedure(tmp_path):
+    skills = tmp_path / "skills"
+    cache = tmp_path / "cache"
+    (skills / "review").mkdir(parents=True)
+    (skills / "review" / "SKILL.md").write_text("- Inspect the diff\n- Report defects first\n")
+    skill = ToolDef("Skill", "load a skill", SKILL_SCHEMA, SKILL_SCHEMA)
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("use the review skill"),)),),
+        (skill, read),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("s1", "Skill", '{"name": "review"}'), finish_chunk("tool_calls")])
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    s = Settings()
+    s.skills.enabled = True
+    s.skills.dir = str(skills)
+    s.skills.cache_dir = str(cache)
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, s, metrics)]
+    assert not any(isinstance(e, ToolCall) and e.name == "Skill" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert "Compiled skill procedure for review" in str(fake.requests[1])
+    assert "Inspect the diff" in str(fake.requests[1])
+    assert metrics["skill_compiled"] == 1

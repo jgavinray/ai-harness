@@ -36,6 +36,12 @@ enabled = false             # opt in: generate one plan per main session via a p
 max_steps = 8
 max_chars = 4000
 
+[skills]
+enabled = false             # opt in: intercept Skill calls and inject compiled procedures
+dir = "~/.codex/skills"
+cache_dir = "~/.ai-harness/compiled-skills"
+max_tokens = 400
+
 # ---- fleet mode (preferred): one [[backends]] block per server ----
 # [[backends]]
 # name = "big"
