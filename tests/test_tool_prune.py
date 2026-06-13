@@ -47,3 +47,11 @@ def test_toggle_off_identity():
     s.pipeline.tool_prune = False
     out = ToolPruneStage().apply(conv(), s)
     assert len(out.tools) == len(ALL_TOOLS)
+
+
+def test_all_tools_records_full_inventory():
+    # The relay surfaces hidden schemas from all_tools; pruning must
+    # record the full inventory before cutting the surfaced set.
+    out = ToolPruneStage().apply(conv(), Settings())
+    assert out.all_tools == ALL_TOOLS
+    assert len(out.tools) < len(out.all_tools)

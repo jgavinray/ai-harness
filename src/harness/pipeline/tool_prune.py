@@ -32,4 +32,6 @@ class ToolPruneStage:
                 keep.append(name)
             if len(keep) >= settings.pipeline.max_tools:
                 break
-        return replace(conv, tools=tuple(by_name[n] for n in keep))
+        return replace(
+            conv, tools=tuple(by_name[n] for n in keep), all_tools=conv.tools
+        )

@@ -65,6 +65,9 @@ class Conversation:
     turns: tuple[Turn, ...]
     tools: tuple[ToolDef, ...]
     params: GenParams
+    # full client inventory; `tools` above is the surfaced subset whose
+    # schemas the model sees. Empty when pruning is disabled.
+    all_tools: tuple[ToolDef, ...] = ()
 
 
 # ---- stream events (profile parse / relay output) ----
