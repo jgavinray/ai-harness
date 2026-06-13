@@ -9,7 +9,7 @@ never execute a stale plan without re-reading the files it names.**
 
 | # | Capability | Plan file | Status |
 |---|-----------|-----------|--------|
-| 1 | Tool autonomy (①) | `2026-06-12-tool-autonomy.md` | ready to execute |
+| 1 | Tool autonomy (①) | `2026-06-12-tool-autonomy.md` | **done 2026-06-12** (b47a2fb..9c35752, 162 tests green) |
 | 2 | Eval expansion | `(to write)` | next |
 | 3 | Workflow guards (⑥) | `(to write)` | — |
 | 4 | Planning scaffold (④) | `(to write)` | — |

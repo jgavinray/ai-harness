@@ -26,7 +26,7 @@ The relay needs the full tool inventory to surface hidden schemas. The pruning s
 - Modify: `src/harness/pipeline/tool_prune.py`
 - Test: `tests/test_tool_prune.py`
 
-- [ ] **Step 1: Write the failing test** — append to `tests/test_tool_prune.py`:
+- [x] **Step 1: Write the failing test** — append to `tests/test_tool_prune.py`:
 
 ```python
 def test_all_tools_records_full_inventory():
@@ -37,12 +37,12 @@ def test_all_tools_records_full_inventory():
     assert len(out.tools) < len(out.all_tools)
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py::test_all_tools_records_full_inventory -q`
 Expected: FAIL with `TypeError` or `AttributeError` mentioning `all_tools` (the field does not exist yet).
 
-- [ ] **Step 3: Add the field** — in `src/harness/ir.py`, change the `Conversation` dataclass to:
+- [x] **Step 3: Add the field** — in `src/harness/ir.py`, change the `Conversation` dataclass to:
 
 ```python
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class Conversation:
     all_tools: tuple[ToolDef, ...] = ()
 ```
 
-- [ ] **Step 4: Record it in the stage** — in `src/harness/pipeline/tool_prune.py`, change the last line of `ToolPruneStage.apply` from:
+- [x] **Step 4: Record it in the stage** — in `src/harness/pipeline/tool_prune.py`, change the last line of `ToolPruneStage.apply` from:
 
 ```python
         return replace(conv, tools=tuple(by_name[n] for n in keep))
@@ -70,12 +70,12 @@ to:
         )
 ```
 
-- [ ] **Step 5: Run the test, then the full suite**
+- [x] **Step 5: Run the test, then the full suite**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q` → all pass.
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass (the new field has a default, so nothing else breaks).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/harness/ir.py src/harness/pipeline/tool_prune.py tests/test_tool_prune.py
@@ -94,7 +94,7 @@ Today only the last 4 turns count, so a tool used 10 turns ago drops out and the
 - Modify: `src/harness/pipeline/tool_prune.py`
 - Test: `tests/test_tool_prune.py` (one test REPLACED deliberately, one added)
 
-- [ ] **Step 1: Replace the obsolete test** — in `tests/test_tool_prune.py`, DELETE `test_old_usage_not_kept` (it asserts the old churn-prone behavior) and add in its place:
+- [x] **Step 1: Replace the obsolete test** — in `tests/test_tool_prune.py`, DELETE `test_old_usage_not_kept` (it asserts the old churn-prone behavior) and add in its place:
 
 ```python
 def test_old_usage_stays_surfaced():
@@ -125,12 +125,12 @@ def test_called_tools_keep_first_call_order():
     assert names.index("NotebookEdit") < names.index("WebFetch")
 ```
 
-- [ ] **Step 2: Run them, verify the new ones fail**
+- [x] **Step 2: Run them, verify the new ones fail**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q`
 Expected: `test_old_usage_stays_surfaced` FAILS (WebFetch missing); order test may pass or fail.
 
-- [ ] **Step 3: Implement** — in `src/harness/pipeline/tool_prune.py`, replace the `recent` collection block inside `apply` (the `for turn in conv.turns[-settings.pipeline.recent_turns_protected:]` loop) with:
+- [x] **Step 3: Implement** — in `src/harness/pipeline/tool_prune.py`, replace the `recent` collection block inside `apply` (the `for turn in conv.turns[-settings.pipeline.recent_turns_protected:]` loop) with:
 
 ```python
         called: list[str] = []
@@ -142,12 +142,12 @@ Expected: `test_old_usage_stays_surfaced` FAILS (WebFetch missing); order test m
 
 and change the keep loop's source tuple from `(*recent, *CORE, *by_name)` to `(*called, *CORE, *by_name)`.
 
-- [ ] **Step 4: Run the file's tests, then the full suite**
+- [x] **Step 4: Run the file's tests, then the full suite**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q` → all pass.
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/pipeline/tool_prune.py tests/test_tool_prune.py
@@ -166,7 +166,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Modify: `src/harness/pipeline/tool_prune.py`
 - Test: `tests/test_tool_prune.py`
 
-- [ ] **Step 1: Write the failing tests** — append to `tests/test_tool_prune.py`:
+- [x] **Step 1: Write the failing tests** — append to `tests/test_tool_prune.py`:
 
 ```python
 MCP_TOOLS = tuple(
@@ -221,12 +221,12 @@ def test_tool_results_do_not_trigger_matching():
     assert "mcp__slack__send_message" not in {t.name for t in out.tools}
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q`
 Expected: the first three new tests FAIL (named tools missing); the fourth passes already.
 
-- [ ] **Step 3: Implement the matcher** — in `src/harness/pipeline/tool_prune.py`, add `import re` and `TextPart` to the imports (`from harness.ir import Conversation, TextPart, ToolCallPart`), then add above the class:
+- [x] **Step 3: Implement the matcher** — in `src/harness/pipeline/tool_prune.py`, add `import re` and `TextPart` to the imports (`from harness.ir import Conversation, TextPart, ToolCallPart`), then add above the class:
 
 ```python
 def _last_user_text(conv: Conversation) -> str:
@@ -263,16 +263,16 @@ def _named_tools(conv: Conversation) -> list[str]:
 
 then change the keep loop's source tuple from `(*called, *CORE, *by_name)` to `(*called, *_named_tools(conv), *CORE, *by_name)`.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q` → all pass.
 If `test_named_mcp_server_surfaces_its_tools` fails on the slack assertion, check `_mentioned`: "slack" must not be found in "use the github mcp to open a PR".
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/harness/pipeline/tool_prune.py tests/test_tool_prune.py
@@ -293,7 +293,7 @@ One line per tool, appended to the system prompt. It lists the FULL inventory (n
 - Modify: `harness.toml.example` (document the flag)
 - Test: `tests/test_tool_prune.py`
 
-- [ ] **Step 1: Write the failing tests** — append to `tests/test_tool_prune.py`:
+- [x] **Step 1: Write the failing tests** — append to `tests/test_tool_prune.py`:
 
 ```python
 def test_catalog_lists_full_inventory():
@@ -334,18 +334,18 @@ def test_catalog_summaries_are_short():
     assert "First sentence stays" in line
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q`
 Expected: all four new tests FAIL (`## Tool catalog` absent; `tool_catalog` flag missing raises on the flag test).
 
-- [ ] **Step 3: Add the config flag** — in `src/harness/config.py`, add one line to `PipelineCfg` after `tool_prune: bool = True`:
+- [x] **Step 3: Add the config flag** — in `src/harness/config.py`, add one line to `PipelineCfg` after `tool_prune: bool = True`:
 
 ```python
     tool_catalog: bool = True  # list the full tool inventory in the system prompt
 ```
 
-- [ ] **Step 4: Implement the catalog** — in `src/harness/pipeline/tool_prune.py`, add above the class:
+- [x] **Step 4: Implement the catalog** — in `src/harness/pipeline/tool_prune.py`, add above the class:
 
 ```python
 CATALOG_HEADER = (
@@ -382,18 +382,18 @@ and change the stage's return to:
 
 (The catalog is built from `conv.tools` — the full inventory, since this runs pre-prune — and depends on nothing else, which is what makes it byte-stable.)
 
-- [ ] **Step 5: Document the flag** — in `harness.toml.example`, under the `[pipeline]` section, add:
+- [x] **Step 5: Document the flag** — in `harness.toml.example`, under the `[pipeline]` section, add:
 
 ```toml
 tool_catalog = true   # list every tool (1 line each) so the model can call hidden ones
 ```
 
-- [ ] **Step 6: Run the tests, then the full suite**
+- [x] **Step 6: Run the tests, then the full suite**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q` → all pass.
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/harness/config.py src/harness/pipeline/tool_prune.py harness.toml.example tests/test_tool_prune.py
@@ -412,7 +412,7 @@ The model read the catalog and called a hidden tool with correct arguments. That
 - Modify: `src/harness/relay.py`
 - Test: `tests/test_relay.py`
 
-- [ ] **Step 1: Write the failing test** — append to `tests/test_relay.py`:
+- [x] **Step 1: Write the failing test** — append to `tests/test_relay.py`:
 
 ```python
 WEB_SCHEMA = {
@@ -449,12 +449,12 @@ async def test_hidden_tool_valid_call_passes_through():
     assert metrics["tool_surfaced"] == 1
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_relay.py::test_hidden_tool_valid_call_passes_through -q`
 Expected: FAIL — no ToolCall event (today an unknown tool goes down the feedback/invalid path) or KeyError on `tool_surfaced`.
 
-- [ ] **Step 3: Implement** — in `src/harness/relay.py`:
+- [x] **Step 3: Implement** — in `src/harness/relay.py`:
 
 (a) add a helper above `run` (and add `Conversation` — already imported):
 
@@ -495,11 +495,11 @@ to:
                         fixed, error = repair_toolcall(ev, conv.tools)
 ```
 
-- [ ] **Step 4: Run the test, then the full relay file**
+- [x] **Step 4: Run the test, then the full relay file**
 
 Run: `.venv/bin/python -m pytest tests/test_relay.py -q` → all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/harness/relay.py tests/test_relay.py
@@ -518,7 +518,7 @@ The model reached for a hidden tool but got the arguments wrong. Swap the real s
 - Modify: none expected — Task 5's code already produces this behavior; this task PROVES it with tests.
 - Test: `tests/test_relay.py`
 
-- [ ] **Step 1: Write the tests** — append to `tests/test_relay.py`:
+- [x] **Step 1: Write the tests** — append to `tests/test_relay.py`:
 
 ```python
 async def test_hidden_tool_invalid_call_swaps_schema_and_retries():
@@ -557,16 +557,16 @@ async def test_truly_unknown_tool_still_fails_with_feedback():
     assert metrics["tool_surfaced"] == 0
 ```
 
-- [ ] **Step 2: Run them**
+- [x] **Step 2: Run them**
 
 Run: `.venv/bin/python -m pytest tests/test_relay.py -q`
 Expected: both PASS if Task 5 was implemented correctly (the swap feeds the existing retry path). If the first FAILS on `retry_tools`, verify the profile renders `conv.tools` into the payload `tools` field and that `_surface_tool` ran before `_append_feedback`; the `conv` variable must be reassigned (`conv = surfaced`) so the retry render includes the swapped schema.
 
-- [ ] **Step 3: Run the full suite**
+- [x] **Step 3: Run the full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/test_relay.py
@@ -584,7 +584,7 @@ Prove the loop converges across requests: a hidden tool that got called appears 
 **Files:**
 - Test: `tests/test_tool_prune.py`
 
-- [ ] **Step 1: Write the test** — append to `tests/test_tool_prune.py`:
+- [x] **Step 1: Write the test** — append to `tests/test_tool_prune.py`:
 
 ```python
 def test_called_hidden_tool_stays_surfaced_next_request():
@@ -606,17 +606,17 @@ def test_called_hidden_tool_stays_surfaced_next_request():
     assert "mcp__slack__send_message" in {t.name for t in out.tools}
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `.venv/bin/python -m pytest tests/test_tool_prune.py -q`
 Expected: PASS immediately (Task 2 built this); if it fails, the called-priority loop is not scanning all turns.
 
-- [ ] **Step 3: Full suite + line count check**
+- [x] **Step 3: Full suite + line count check**
 
 Run: `.venv/bin/python -m pytest tests/ -q` → all pass.
 Run: `wc -l src/harness/pipeline/tool_prune.py` → must stay under ~120 lines (self-maintainability; if larger, move the matcher helpers to `src/harness/pipeline/tool_match.py` and import them).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/test_tool_prune.py
