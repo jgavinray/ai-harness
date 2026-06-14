@@ -22,6 +22,7 @@ def test_config_matrix():
     assert m["ablate-memory"]["memory"] is False
     assert m["ablate-skills"]["skills"] is False
     assert m["ablate-research"]["research"] is False
+    assert m["ablate-review"]["review"] is False
 
 
 def test_render_baseline_passthrough(tmp_path):
@@ -39,6 +40,7 @@ def test_render_baseline_passthrough(tmp_path):
     assert "[memory]\nenabled = false" in baseline
     assert "[skills]\nenabled = false" in baseline
     assert "[research]\nenabled = false" in baseline
+    assert "[review]\nenabled = false" in baseline
     full = paths["full"].read_text()
     assert 'system_prompt = "replace"' in full
     assert "tool_catalog = true" in full
@@ -47,6 +49,7 @@ def test_render_baseline_passthrough(tmp_path):
     assert "[memory]\nenabled = true" in full
     assert "[skills]\nenabled = true" in full
     assert "[research]\nenabled = true" in full
+    assert "[review]\nenabled = true" in full
     # generated configs must be loadable by the harness
     from harness.config import load_settings
     s = load_settings(paths["baseline"])
@@ -62,6 +65,7 @@ def test_report_aggregation(tmp_path):
          "capability_fallbacks": 0,
          "research_briefs": 0,
          "skill_compiled": 0,
+         "review_generated": 0,
          "memory_tokens": 20,
          "input_tokens": 1000, "output_tokens": 100, "session_wall_s": 30},
         {"model": "m", "config": "full", "success": False, "timed_out": True,
@@ -71,6 +75,7 @@ def test_report_aggregation(tmp_path):
          "capability_fallbacks": 2,
          "research_briefs": 2,
          "skill_compiled": 2,
+         "review_generated": 2,
          "memory_tokens": 40,
          "input_tokens": 500, "output_tokens": 50, "session_wall_s": 300},
     ]
@@ -88,6 +93,7 @@ def test_report_aggregation(tmp_path):
     assert m["capability_fallbacks_per_session"] == 1.0
     assert m["research_briefs_per_session"] == 1.0
     assert m["skill_compiled_per_session"] == 1.0
+    assert m["review_generated_per_session"] == 1.0
     assert m["memory_tokens_per_session"] == 30.0
     md = eval_report.markdown(agg)
     assert "| m | full |" in md

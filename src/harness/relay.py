@@ -10,7 +10,7 @@ Invariants:
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable
 
 from harness.backends.base import Backend
 from harness.config import Settings
@@ -36,6 +36,8 @@ from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
+
+ReviewCallback = Callable[[str, Conversation, str, dict], Awaitable[str | None]]
 
 
 # Cross-turn loop breaking: the DegenerateDetector catches repetition inside
@@ -145,6 +147,7 @@ async def run(
     backend: Backend,
     settings: Settings,
     metrics: dict | None = None,
+    reviewer: ReviewCallback | None = None,
 ) -> AsyncIterator[IREvent]:
     m = metrics if metrics is not None else {}
     m.setdefault("retries", 0)
@@ -165,6 +168,15 @@ async def run(
     require_tool_after_invalid_skill = False
 
     model_name = getattr(backend, "model_name", settings.backend.model)
+
+    async def reviewed(trigger: str, message: str) -> str:
+        if reviewer is None:
+            return message
+        feedback = await reviewer(trigger, conv, message, m)
+        if not feedback:
+            return message
+        return f"{message}\n\nReviewer feedback:\n{feedback}"
+
     while True:
         payload = profile.render(conv, model_name)
         if attempts and backend.constrained and constraint_schema is not None:
@@ -278,7 +290,13 @@ async def run(
             m["loop_breaks"] += 1
             increment_guard(m, "same_approach")
             suppress_text = True
-            conv = _append_loop_feedback(conv, loop_call, loop_seen)
+            feedback = (
+                f"You have already called {loop_call.name!r} with these identical "
+                f"arguments {loop_seen} times in this conversation; the result "
+                "will not change. Do not repeat it. Use the results you already "
+                "have, take a different action, or state your conclusion."
+            )
+            conv = _append_guard_feedback(conv, "same_approach", await reviewed("loop_break", feedback))
             continue
 
         if guarded_call is not None:
@@ -288,7 +306,7 @@ async def run(
             if guard == "plan_drift":
                 m["plan_drift"] += 1
             suppress_text = True
-            conv = _append_guard_feedback(conv, guard, message)
+            conv = _append_guard_feedback(conv, guard, await reviewed(guard, message))
             continue
 
         if skill_feedback is not None:
@@ -319,7 +337,7 @@ async def run(
             if guard == "plan_drift":
                 m["plan_drift"] += 1
             suppress_text = True
-            conv = _append_guard_feedback(conv, guard, message)
+            conv = _append_guard_feedback(conv, guard, await reviewed(guard, message))
             continue
 
         if bad_call is None:
@@ -331,5 +349,23 @@ async def run(
         m["retries"] += 1
         suppress_text = True
         tool = next((t for t in conv.tools if t.name == bad_call.name), None)
-        constraint_schema = tool.original_schema if tool else None
-        conv = _append_feedback(conv, bad_call, bad_error)
+        constraint_schema = tool.input_schema if tool else None
+        if reviewer is not None:
+            attempt = bad_call.raw_arguments or str(bad_call.arguments)
+            feedback = (
+                f"Your call to tool {bad_call.name!r} was invalid: {bad_error}\n"
+                f"Your arguments were: {attempt[:500]}\n"
+                "Call the tool again with corrected JSON arguments that match its schema exactly."
+            )
+            reviewed_feedback = await reviewed("invalid_tool_retry", feedback)
+            conv = replace(
+                conv,
+                turns=conv.turns + (
+                    Turn("assistant", (TextPart(
+                        f"[attempted tool call: {bad_call.name} {attempt[:200]}]"
+                    ),)),
+                    Turn("user", (TextPart(reviewed_feedback),)),
+                ),
+            )
+        else:
+            conv = _append_feedback(conv, bad_call, bad_error)

@@ -36,6 +36,16 @@ enabled = false             # opt in: generate one plan per main session via a p
 max_steps = 8
 max_chars = 4000
 
+[routing]
+reasoning = true            # route explanation/architecture/research turns to a reasoning-role backend
+reasoning_readonly_tools = ["Read", "Grep", "Glob", "LS", "WebFetch"]
+
+[review]
+enabled = false             # opt in: strong-model critic for risky executor checkpoints
+max_chars = 6000
+max_tokens = 500
+triggers = ["plan_drift", "verify_after_edit", "loop_break", "invalid_tool_retry"]
+
 [skills]
 enabled = false             # opt in: intercept Skill calls and inject compiled procedures
 dir = "~/.codex/skills"
@@ -56,7 +66,7 @@ chunk_chars = 4000
 # model = "model-id"
 # profile = "qwen"           # qwen | deepseek_r1 | devstral | gemma
 # context_window = 131072
-# roles = ["main"]           # main | subagent | fast
+# roles = ["main"]           # main | subagent | fast | reasoning | plan | review
 # roles = ["candidate"]      # shadow-eval only; never live-routed
 # capabilities = []          # e.g. ["vision"], ["ocr"], ["embed"], ["audio"]
 # relaxed = []               # eval-gated scaffolds this backend no longer needs

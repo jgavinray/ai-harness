@@ -77,6 +77,23 @@ class PlanningCfg(BaseModel):
     max_chars: int = 4000
 
 
+class RoutingCfg(BaseModel):
+    reasoning: bool = True
+    reasoning_readonly_tools: list[str] = ["Read", "Grep", "Glob", "LS", "WebFetch"]
+
+
+class ReviewCfg(BaseModel):
+    enabled: bool = False
+    max_chars: int = 6000
+    max_tokens: int = 500
+    triggers: list[str] = [
+        "plan_drift",
+        "verify_after_edit",
+        "loop_break",
+        "invalid_tool_retry",
+    ]
+
+
 class SkillsCfg(BaseModel):
     enabled: bool = False
     dir: str = "~/.codex/skills"
@@ -110,6 +127,8 @@ class Settings(BaseModel):
     traces: TracesCfg = TracesCfg()
     memory: MemoryCfg = MemoryCfg()
     planning: PlanningCfg = PlanningCfg()
+    routing: RoutingCfg = RoutingCfg()
+    review: ReviewCfg = ReviewCfg()
     skills: SkillsCfg = SkillsCfg()
     research: ResearchCfg = ResearchCfg()
 

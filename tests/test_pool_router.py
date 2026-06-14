@@ -1,10 +1,12 @@
+import time
+
 import httpx
 import pytest
 
 from harness.backends.base import BackendError
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import BackendCfg, PoolBackendCfg, Settings
-from harness.router import Router, request_capabilities, session_key
+from harness.router import Router, request_capabilities, request_role, session_key
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
 
 
@@ -180,8 +182,70 @@ def test_request_role_haiku_fast():
 
 
 def test_request_role_unknown_defaults_main():
-    from harness.router import request_role
     assert request_role({"model": "claude-opus-4-8", "system": "custom"}) == "main"
+
+
+def test_request_role_reasoning_when_enabled():
+    s = Settings()
+    body = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "Explain how the router works"}],
+    }
+    assert request_role(body, s) == "reasoning"
+
+
+def test_request_role_execution_intent_stays_main():
+    s = Settings()
+    body = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "Fix the router bug"}],
+    }
+    assert request_role(body, s) == "main"
+
+
+def test_router_routes_reasoning_to_reasoning_backend():
+    s = fleet_settings()
+    s.backends.append(
+        PoolBackendCfg(
+            name="reasoner", base_url="http://reasoner/v1", model="r1",
+            roles=["reasoning"],
+        )
+    )
+    router = Router(make_pool(s), s)
+    body = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "Compare these architecture options"}],
+    }
+    assert router.pick(body).name == "reasoner"
+
+
+def test_router_affinity_is_scoped_by_role():
+    s = fleet_settings()
+    s.backends.append(
+        PoolBackendCfg(
+            name="reasoner", base_url="http://reasoner/v1", model="r1",
+            roles=["reasoning"],
+        )
+    )
+    router = Router(make_pool(s), s)
+    body_reasoning = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "Explain the architecture"}],
+    }
+    body_main = {
+        **body_reasoning,
+        "messages": [
+            {"role": "user", "content": "Explain the architecture"},
+            {"role": "assistant", "content": "notes"},
+            {"role": "user", "content": "Now implement the endpoint"},
+        ],
+    }
+    assert router.pick(body_reasoning).name == "reasoner"
+    assert router.pick(body_main).name == "big"
 
 
 def test_request_capabilities_detects_image_blocks():
@@ -334,6 +398,38 @@ def test_affinity_sticky_for_large_context_despite_capacity():
     assert router.pick(body).name == "big"   # affinity established
     pool.get("big").in_flight = 1            # saturated
     assert router.pick(body).name == "big"   # large context: stays anyway
+
+
+def test_affinity_ignores_backend_without_request_role_even_when_sticky():
+    # A stale affinity row can point at an overflow/subagent backend after
+    # config changes or older router behavior. Large-context stickiness must
+    # not turn that stale row into a permanent main-session placement.
+    pool = make_pool(fleet_settings())
+    router = Router(pool, fleet_settings())
+    body = {"model": "claude-opus-4-8",
+            "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "x" * 80000},
+                {"role": "user", "content": "continue"},
+            ]}
+    router.affinity[(session_key(body), "main")] = ("gem", time.time())
+    assert router.pick(body).name == "big"
+
+
+def test_affinity_ignores_backend_without_request_capabilities():
+    s = fleet_settings()
+    s.backends[2].capabilities = ["vision"]
+    pool = make_pool(s)
+    router = Router(pool, s)
+    body = {"model": "claude-opus-4-8",
+            "system": "custom",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image", "source": {"type": "base64", "data": "abc"}},
+            ]}]}
+    router.affinity[(session_key(body), "main")] = ("big", time.time())
+    assert router.pick(body).name == "gem"
 
 
 def test_candidate_backend_excluded_from_live_routing():

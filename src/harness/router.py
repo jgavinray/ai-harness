@@ -58,6 +58,43 @@ def session_key(body: dict) -> str:
 
 MAIN_FINGERPRINT = "You are Claude Code, Anthropic's official CLI"
 SUBAGENT_MARKERS = ("Claude Agent SDK", "You are an agent for Claude Code")
+REASONING_WORDS = (
+    "analyze",
+    "analysis",
+    "architecture",
+    "architectural",
+    "compare",
+    "diagnose",
+    "explain",
+    "how does",
+    "how do",
+    "research",
+    "review",
+    "summarize",
+    "tradeoff",
+    "trade-off",
+    "understand",
+    "what is",
+    "why",
+)
+EXECUTION_WORDS = (
+    "add",
+    "build",
+    "change",
+    "commit",
+    "create",
+    "delete",
+    "edit",
+    "fix",
+    "implement",
+    "modify",
+    "patch",
+    "refactor",
+    "remove",
+    "run",
+    "update",
+    "write",
+)
 
 
 def _est_context_tokens(body: dict) -> int:
@@ -68,16 +105,35 @@ def _est_context_tokens(body: dict) -> int:
     return total // 4
 
 
-def request_role(body: dict) -> str:
+def _latest_user_text(body: dict) -> str:
+    for msg in reversed(body.get("messages") or []):
+        if msg.get("role") == "user":
+            return _flatten(msg.get("content")).strip().lower()
+    return ""
+
+
+def _looks_reasoning(text: str) -> bool:
+    if not text:
+        return False
+    if any(word in text for word in EXECUTION_WORDS):
+        return False
+    return any(word in text for word in REASONING_WORDS)
+
+
+def request_role(body: dict, settings: Settings | None = None) -> str:
     """fast: haiku-class. subagent: Task/SDK agent fingerprints.
+    reasoning: conceptual/explanatory turns when enabled.
     main: the interactive CLI loop, and the safe default for unknowns."""
     if "haiku" in (body.get("model") or ""):
         return "fast"
     system = _flatten(body.get("system") or "")[:KEY_BASIS_CHARS]
-    if MAIN_FINGERPRINT in system:
-        return "main"
     if any(marker in system for marker in SUBAGENT_MARKERS):
         return "subagent"
+    if (settings is not None and settings.routing.reasoning
+            and _looks_reasoning(_latest_user_text(body))):
+        return "reasoning"
+    if MAIN_FINGERPRINT in system:
+        return "main"
     return "main"
 
 
@@ -97,26 +153,31 @@ class Router:
     def __init__(self, pool: BackendPool, settings: Settings) -> None:
         self.pool = pool
         self.settings = settings
-        self.affinity: dict[str, tuple[str, float]] = {}
+        self.affinity: dict[tuple[str, str], tuple[str, float]] = {}
 
     def pick(self, body: dict) -> PooledBackend:
         key = session_key(body)
-        hit = self.affinity.get(key)
+        role = request_role(body, self.settings)
+        affinity_key = (key, role)
+        needs = request_capabilities(body)
+        hit = self.affinity.get(affinity_key)
         if hit:
             name, ts = hit
             backend = self.pool.get(name)
             sticky = _est_context_tokens(body) > STICKY_CONTEXT_TOKENS
+            has_role = backend and role in backend.roles
+            has_capabilities = backend and needs.issubset(set(backend.cfg.capabilities))
             if (
                 backend
+                and has_role
+                and has_capabilities
                 and not backend.is_down()
                 and (sticky or not backend.at_capacity)
                 and time.time() - ts < AFFINITY_TTL_S
             ):
-                self.affinity[key] = (name, time.time())
+                self.affinity[affinity_key] = (name, time.time())
                 return backend
 
-        role = request_role(body)
-        needs = request_capabilities(body)
         if needs:
             capable = [b for b in self.pool.with_capabilities(needs) if not b.at_capacity]
             if capable:
@@ -164,5 +225,5 @@ class Router:
         # the sticky rule) to a backend that never held its KV prefix. Only a
         # role-correct backend may become the session's home.
         if role in chosen.roles:
-            self.affinity[key] = (chosen.name, time.time())
+            self.affinity[affinity_key] = (chosen.name, time.time())
         return chosen

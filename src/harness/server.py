@@ -12,6 +12,7 @@ import asyncio
 import json
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -31,6 +32,7 @@ from harness.ir import Done
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
 from harness.planning import PlanningManager
+from harness.review import ReviewManager
 from harness.research import ResearchManager, memory_fact
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
@@ -137,6 +139,12 @@ def _percentile(values: list[int], pct: float) -> int:
     return ordered[min(int(len(ordered) * pct), len(ordered) - 1)]
 
 
+def _readonly_reasoning(conv, settings: Settings):
+    allowed = set(settings.routing.reasoning_readonly_tools)
+    tools = tuple(t for t in conv.tools if t.name in allowed)
+    return replace(conv, tools=tools, all_tools=tools)
+
+
 async def _replay(events):
     for ev in events:
         yield ev
@@ -201,6 +209,7 @@ def create_app(
     logger = RequestLogger(settings.log.requests_path)
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
     planner = PlanningManager(settings)
+    reviewer = ReviewManager(settings)
     research = ResearchManager(settings)
 
     async def fast_complete(messages: list[dict]) -> str:
@@ -269,6 +278,9 @@ def create_app(
             return invalid_request(f"could not decode request: {exc!r}")
 
         _dump(settings, "anthropic-request", body)
+        role = request_role(body, settings)
+        if role == "reasoning":
+            conv = _readonly_reasoning(conv, settings)
         chosen = router.pick(body)
         # The compaction budget depends on which backend serves the request,
         # so route first and pipeline against that backend's context window.
@@ -277,7 +289,6 @@ def create_app(
         _apply_relaxed(req_settings, chosen.cfg.relaxed)
         conv = run_pipeline(conv, req_settings, stages)
         skey = session_key(body)
-        role = request_role(body)
         rendered = chosen.profile.render(conv, chosen.model_name)
         _dump(settings, "rendered-payload", rendered)
 
@@ -287,6 +298,8 @@ def create_app(
         metrics: dict = {}
         metrics["memory_tokens"] = injected_memory_tokens(conv.system, counter)
         metrics["capability_fallbacks"] = fallback_count
+        metrics["routing_intent"] = role
+        metrics["routing_reason"] = "heuristic"
         record: dict = {
             "request_id": msg_id,
             "session_key": skey,
@@ -301,7 +314,7 @@ def create_app(
             "ttft_ms": None,
         }
         start = time.monotonic()
-        if role == "main":
+        if role in ("main", "reasoning"):
             if req_settings.research.enabled:
                 try:
                     brief = await research.ensure(conv, pool, metrics)
@@ -313,6 +326,7 @@ def create_app(
                     _dump(settings, "rendered-payload", rendered)
                 except Exception as exc:
                     metrics["research_error"] = str(exc)
+        if role == "main":
             if req_settings.planning.enabled:
                 metrics.setdefault("plan_drift", 0)
                 try:
@@ -331,7 +345,20 @@ def create_app(
             record["cache"] = "response"
             events = _replay(cached_events)
         else:
-            events = relay.run(conv, chosen.profile, chosen, req_settings, metrics=metrics)
+            review_cb = None
+            if role == "main" and req_settings.review.enabled:
+                async def review_cb(trigger, review_conv, message, review_metrics):
+                    return await reviewer.review(
+                        trigger, review_conv, message, pool, review_metrics
+                    )
+            events = relay.run(
+                conv,
+                chosen.profile,
+                chosen,
+                req_settings,
+                metrics=metrics,
+                reviewer=review_cb,
+            )
 
         buffer: list = []
 

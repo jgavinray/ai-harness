@@ -251,6 +251,111 @@ async def test_planning_scaffold_generated_once_and_injected():
     assert "Write a concrete execution plan" not in json.dumps(fake.requests[2])
 
 
+async def test_reasoning_route_uses_readonly_tools_only():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.push([text_chunk("explanation"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(
+            name="reasoner",
+            base_url="http://fake/v1",
+            model="r",
+            roles=["reasoning"],
+        ),
+        PoolBackendCfg(
+            name="executor",
+            base_url="http://fake/v1",
+            model="m",
+            roles=["main"],
+        ),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False, tools=[READ_TOOL, EDIT_TOOL])
+    body["messages"] = [{"role": "user", "content": "Explain how /x works"}]
+
+    async with client:
+        resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 200
+    sent = fake.requests[0]
+    assert sent["model"] == "r"
+    assert [t["function"]["name"] for t in sent.get("tools", [])] == ["Read"]
+
+
+async def test_review_sidecar_adds_feedback_on_done_guard():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    fake.push([text_chunk("Run pytest -q before claiming completion."), finish_chunk("stop")])
+    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
+
+    settings = Settings()
+    settings.review.enabled = True
+    settings.backends = [
+        PoolBackendCfg(
+            name="executor",
+            base_url="http://fake/v1",
+            model="m",
+            roles=["main"],
+        ),
+        PoolBackendCfg(
+            name="critic",
+            base_url="http://fake/v1",
+            model="r",
+            roles=["review"],
+        ),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False, tools=[READ_TOOL, EDIT_TOOL, {
+        "name": "Bash",
+        "description": "Runs a command",
+        "input_schema": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    }])
+    body["messages"] = [
+        {"role": "user", "content": "Fix /x"},
+        {
+            "role": "assistant",
+            "content": [{
+                "id": "e1",
+                "type": "tool_use",
+                "name": "Edit",
+                "input": {
+                        "file_path": "/x",
+                        "old_string": "a",
+                        "new_string": "b",
+                },
+            }],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "e1", "content": "edited"}]},
+    ]
+
+    async with client:
+        resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 200
+    assert len(fake.requests) == 3
+    assert fake.requests[1]["model"] == "r"
+    assert "runtime critic" in fake.requests[1]["messages"][0]["content"]
+    assert "Reviewer feedback" in json.dumps(fake.requests[2])
+    assert "Run pytest -q" in json.dumps(fake.requests[2])
+
+
 async def test_backend_relaxed_planning_skips_planner():
     from harness.config import PoolBackendCfg
 

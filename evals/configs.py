@@ -13,7 +13,7 @@ PIPELINE_STAGES = {
     "workflow_guards": ("workflow_guards = true", "workflow_guards = false"),
 }
 
-SECTION_STAGES = ("planning", "memory", "skills", "research")
+SECTION_STAGES = ("planning", "memory", "skills", "research", "review")
 STAGES = tuple(PIPELINE_STAGES) + SECTION_STAGES
 
 
@@ -63,6 +63,9 @@ def render(
         "[research]",
         f"enabled = {str(overrides.get('research', True)).lower()}",
         f'cache_dir = "{state / "research"}"',
+        "",
+        "[review]",
+        f"enabled = {str(overrides.get('review', True)).lower()}",
         "",
         "[log]",
         f'requests_path = "{log_path}"',
