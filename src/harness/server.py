@@ -55,6 +55,7 @@ STAGES = [
 ]
 TTFT_WINDOW = 500
 CACHE_WINDOW = 100  # requests in the rolling kv-hit window
+CRITIC_WINDOW = 100
 KV_USED_TTL_S = 60.0  # how long a missed poll may serve the last good reading
 
 # Prometheus gauge (0..1) for live KV pool occupancy, per backend kind.
@@ -157,6 +158,79 @@ async def _replay(events):
         yield ev
 
 
+def _empty_critic_stats() -> dict:
+    return {
+        "calls": 0,
+        "approve": 0,
+        "revise": 0,
+        "errors": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens_observed": 0,
+        "triggers": {},
+        "profiles": {},
+        "feedback_tags": {},
+        "feedback_hashes": {},
+        "recent": [],
+    }
+
+
+def _inc_counter(target: dict, key: str | None, amount: int = 1) -> None:
+    if not key:
+        return
+    target[key] = target.get(key, 0) + amount
+
+
+def _record_critic_stats(critic_stats: dict, record: dict) -> None:
+    if record.get("sidecar_type") != "critic":
+        return
+    critic_stats["calls"] += 1
+    action = record.get("critic_action")
+    if action == "approve":
+        critic_stats["approve"] += 1
+    elif action == "revise":
+        critic_stats["revise"] += 1
+    if record.get("error"):
+        critic_stats["errors"] += 1
+    critic_stats["input_tokens"] += record.get("input_tokens") or 0
+    critic_stats["output_tokens"] += record.get("output_tokens") or 0
+    critic_stats["reasoning_tokens_observed"] += record.get("reasoning_tokens_observed") or 0
+    for trigger in record.get("critic_triggers") or []:
+        _inc_counter(critic_stats["triggers"], trigger)
+    for profile in record.get("critic_matched_profiles") or []:
+        _inc_counter(critic_stats["profiles"], profile)
+    for tag in record.get("critic_feedback_tags") or []:
+        _inc_counter(critic_stats["feedback_tags"], tag)
+    if record.get("critic_feedback_hash"):
+        _inc_counter(critic_stats["feedback_hashes"], record["critic_feedback_hash"])
+    critic_stats["recent"].append({
+        "action": action,
+        "triggers": record.get("critic_triggers") or [],
+        "profiles": record.get("critic_matched_profiles") or [],
+        "feedback_tags": record.get("critic_feedback_tags") or [],
+        "feedback_hash": record.get("critic_feedback_hash"),
+        "parent_request_id": record.get("parent_request_id"),
+    })
+    del critic_stats["recent"][:-CRITIC_WINDOW]
+
+
+def _critic_summary(critic_stats: dict) -> dict:
+    recent = critic_stats["recent"]
+    recent_revise = sum(1 for r in recent if r.get("action") == "revise")
+    repeated = {
+        k: v for k, v in critic_stats["feedback_hashes"].items()
+        if v > 1
+    }
+    return {
+        **{k: v for k, v in critic_stats.items() if k != "recent"},
+        "revise_pct": round(100 * critic_stats["revise"] / (critic_stats["calls"] or 1), 1),
+        "recent_calls": len(recent),
+        "recent_revise": recent_revise,
+        "recent_revise_pct": round(100 * recent_revise / (len(recent) or 1), 1),
+        "repeated_feedback_hashes": repeated,
+    }
+
+
 def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
     """Replay the request log so a restart doesn't zero /stats aggregates.
 
@@ -172,6 +246,8 @@ def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
                 r = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if "critic" in stats:
+                _record_critic_stats(stats["critic"], r)
             stats["requests"] += 1
             if r.get("error"):
                 stats["errors"] += 1
@@ -237,7 +313,7 @@ def create_app(
     memory = MemoryManager(settings, fast_complete if settings.memory.enabled else None)
     stages = STAGES + [MemoryStage(memory, settings)]
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
-             "cached_tokens": 0}
+             "cached_tokens": 0, "critic": _empty_critic_stats()}
     if settings.log.requests_path:
         _seed_stats(stats, pool, settings.log.requests_path)
 
@@ -392,6 +468,7 @@ def create_app(
                     logger=logger,
                     parent_request_id=msg_id,
                     account_usage=account_usage,
+                    record_critic=lambda r: _record_critic_stats(stats["critic"], r),
                 )
                 rendered = chosen.profile.render(conv, chosen.model_name)
                 apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
@@ -558,6 +635,7 @@ def create_app(
         return JSONResponse({
             **stats,
             "backends": backends,
+            "critic": _critic_summary(stats["critic"]),
             "response_cache": {"hits": rcache.hits, "misses": rcache.misses},
         })
 

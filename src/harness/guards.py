@@ -17,6 +17,8 @@ EDIT_TOOLS = {"Edit", "MultiEdit"}
 VERIFY_WORDS = ("pytest", "test", "check", "npm test", "cargo test", "go test")
 DONE_WORDS = ("done", "fixed", "complete", "completed", "implemented", "finished")
 VERIFY_STEP_WORDS = ("verify", "test", "check", "run")
+BAD_DEV_PR_PREFIX = "/Users/jgavinray/dev-pr"
+GOOD_DEV_PR_PREFIX = "/Users/jgavinray/dev/pr"
 
 
 def guard_metrics(metrics: dict) -> dict:
@@ -35,6 +37,19 @@ def increment_guard(metrics: dict, name: str) -> None:
 def _file_arg(call: ToolCall | ToolCallPart) -> str:
     value = call.arguments.get("file_path") or call.arguments.get("path") or ""
     return str(value)
+
+def normalize_confused_paths(call: ToolCall) -> tuple[ToolCall, bool]:
+    """Fix the observed dev-pr/dev/pr path confusion before tool execution."""
+    changed = False
+    args = dict(call.arguments)
+    for key in ("file_path", "path", "command"):
+        value = args.get(key)
+        if isinstance(value, str) and BAD_DEV_PR_PREFIX in value:
+            args[key] = value.replace(BAD_DEV_PR_PREFIX, GOOD_DEV_PR_PREFIX)
+            changed = True
+    if not changed:
+        return call, False
+    return ToolCall(call.id, call.name, args, call.raw_arguments), True
 
 def _read_files(conv: Conversation) -> set[str]:
     out: set[str] = set()

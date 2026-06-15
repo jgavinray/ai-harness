@@ -41,6 +41,7 @@ class CriticManager:
         logger: RequestLogger | None = None,
         parent_request_id: str | None = None,
         account_usage=None,
+        record_critic=None,
     ) -> Conversation:
         if not self.cfg.enabled:
             return conv
@@ -92,6 +93,7 @@ class CriticManager:
         feedback = _feedback(text)
         action = "revise" if feedback else "approve"
         observed = HeuristicCounter().count_text(thinking) if thinking else 0
+        feedback_tags = _feedback_tags(feedback)
         metrics.update({
             "critic_action": action,
             "critic_reasoning_budget_sent": side_metrics.get("reasoning_budget_sent"),
@@ -99,27 +101,33 @@ class CriticManager:
         })
         if account_usage:
             account_usage(backend, done, key, count_request=True, ttft_ms=ttft_ms)
+        sidecar_record = {
+            "kind": "sidecar",
+            "sidecar_type": "critic",
+            "parent_request_id": parent_request_id,
+            "session_key": key,
+            "backend": backend.name,
+            "model": backend.model_name,
+            "role": "critic",
+            "critic_action": action,
+            "critic_triggers": evidence["triggers"],
+            "critic_matched_profiles": evidence["matched_profiles"],
+            "critic_feedback": feedback,
+            "critic_feedback_hash": _feedback_hash(feedback) if feedback else None,
+            "critic_feedback_tags": feedback_tags,
+            "wall_ms": int((time.monotonic() - start) * 1000),
+            "ttft_ms": ttft_ms,
+            "input_tokens": done.input_tokens,
+            "output_tokens": done.output_tokens,
+            "cached_tokens": done.cached_tokens,
+            "stop_reason": done.stop_reason,
+            "reasoning_tokens_observed": observed,
+            **side_metrics,
+        }
+        if record_critic:
+            record_critic(sidecar_record)
         if logger:
-            logger.write({
-                "kind": "sidecar",
-                "sidecar_type": "critic",
-                "parent_request_id": parent_request_id,
-                "session_key": key,
-                "backend": backend.name,
-                "model": backend.model_name,
-                "role": "critic",
-                "critic_action": action,
-                "critic_triggers": evidence["triggers"],
-                "critic_matched_profiles": evidence["matched_profiles"],
-                "wall_ms": int((time.monotonic() - start) * 1000),
-                "ttft_ms": ttft_ms,
-                "input_tokens": done.input_tokens,
-                "output_tokens": done.output_tokens,
-                "cached_tokens": done.cached_tokens,
-                "stop_reason": done.stop_reason,
-                "reasoning_tokens_observed": observed,
-                **side_metrics,
-            })
+            logger.write(sidecar_record)
         if not feedback:
             return conv
         metrics["critic_generated"] = metrics.get("critic_generated", 0) + 1
@@ -225,10 +233,33 @@ def _critic_prompt(conv: Conversation, evidence: dict, max_chars: int) -> str:
 
 
 def _feedback(text: str) -> str:
-    cleaned = text.strip()
-    if not cleaned:
+    stripped = text.strip()
+    if not stripped:
         return ""
-    lowered = cleaned.lower()
+    lowered = stripped.lower()
     if lowered.startswith("approve") or lowered.startswith("no-op") or lowered == "ok":
         return ""
-    return cleaned[:1200]
+    return text
+
+
+def _feedback_hash(feedback: str) -> str:
+    return hashlib.sha1(feedback.encode()).hexdigest()
+
+
+def _feedback_tags(feedback: str) -> list[str]:
+    text = feedback.lower()
+    tags = []
+    checks = [
+        ("path_error", ("path", "directory", "dev-pr", "dev/pr", "does not exist", "non-existent")),
+        ("build_error", ("build", "link", "undefined reference", "compile", "gcc", "make")),
+        ("test_error", ("test", "pytest", "failure", "failed", "assert")),
+        ("missing_directory", ("mkdir", "directory does not exist", "missing directory", "create directory")),
+        ("missing_symbol", ("extern", "undefined symbol", "undefined reference", "declaration")),
+        ("tool_misuse", ("tool", "read tools", "write tool", "bash command", "grep", "edit tool")),
+        ("verification_gap", ("verify", "verification", "run tests", "build check")),
+        ("plan_violation", ("plan", "phase", "skill invocation", "forbidden", "blocked", "blocker")),
+    ]
+    for tag, needles in checks:
+        if any(needle in text for needle in needles):
+            tags.append(tag)
+    return tags

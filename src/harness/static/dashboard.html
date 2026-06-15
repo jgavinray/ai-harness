@@ -42,6 +42,7 @@
   <h2>Legend</h2>
   <dl>
     <dt>resp cache hit</dt><dd>Exact response-cache hit rate since this harness process started; shown as hits over total lookups.</dd>
+    <dt>critic revise</dt><dd>Recent percentage of critic sidecar calls that injected corrective feedback into the next executor turn.</dd>
     <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
     <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
@@ -69,6 +70,8 @@ async function tick() {
       ["kv written tok", fmt(s.input_tokens - s.cached_tokens + s.output_tokens)],
       ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–",
         `${fmt(s.response_cache.hits)} / ${fmt(cacheTotal)}`],
+      ["critic revise", s.critic ? s.critic.recent_revise_pct + "%" : "–",
+        s.critic ? `${fmt(s.critic.recent_revise)} / ${fmt(s.critic.recent_calls)} recent` : ""],
     ];
     document.getElementById("cards").innerHTML = cards
       .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)

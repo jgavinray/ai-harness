@@ -73,6 +73,21 @@ async def test_happy_path():
     assert len(fake.requests) == 1
 
 
+async def test_dev_pr_path_confusion_is_rewritten_before_tool_call():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("c1", "Read", '{"file_path": "/Users/jgavinray/dev-pr/src/main.c"}'),
+        finish_chunk("tool_calls"),
+    ])
+    metrics = {}
+    backend = make(fake)
+    evs = [e async for e in run(conv(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    call = next(e for e in evs if isinstance(e, ToolCall))
+    assert call.arguments["file_path"] == "/Users/jgavinray/dev/pr/src/main.c"
+    assert metrics["path_rewrites"] == 1
+    assert metrics["path_rewrite_names"] == ["Read"]
+
+
 async def test_bad_then_good_retries_with_feedback():
     fake = FakeOpenAI()
     fake.push([

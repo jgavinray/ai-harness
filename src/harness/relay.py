@@ -31,6 +31,7 @@ from harness.guards import (
     guard_tool_call,
     has_unverified_edit,
     increment_guard,
+    normalize_confused_paths,
 )
 from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
@@ -163,6 +164,8 @@ async def run(
     m.setdefault("tool_surfaced_names", [])
     m.setdefault("skill_compiled", 0)
     m.setdefault("plan_drift", 0)
+    m.setdefault("path_rewrites", 0)
+    m.setdefault("path_rewrite_names", [])
     guard_metrics(m)
     attempts = 0
     suppress_text = False
@@ -240,6 +243,10 @@ async def run(
                     invalid_skill = ev.raw_arguments or str(ev.arguments)
                     break
                 if fixed is not None:
+                    fixed, path_rewritten = normalize_confused_paths(fixed)
+                    if path_rewritten:
+                        m["path_rewrites"] += 1
+                        m["path_rewrite_names"].append(fixed.name)
                     if fixed.name == "Skill" and settings.skills.enabled:
                         name = skill_name(fixed.arguments)
                         compiled = skill_compiler.compile(name) if name else None

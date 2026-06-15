@@ -65,10 +65,14 @@ def settings(tmp_path=None):
 
 
 async def test_critic_injects_feedback_before_executor(tmp_path):
+    feedback = (
+        "REVISE: update all callers and add a build check.\n"
+        + "Keep this full feedback for fine tuning. " * 80
+    )
     fake = FakeOpenAI()
     fake.push([
         {"choices": [{"index": 0, "delta": {"reasoning": "check ABI"}, "finish_reason": None}]},
-        text_chunk("REVISE: update all callers and add a build check."),
+        text_chunk(feedback),
         finish_chunk("stop"),
     ])
     fake.push([text_chunk("I'll update callers."), finish_chunk("stop")])
@@ -89,6 +93,9 @@ async def test_critic_injects_feedback_before_executor(tmp_path):
     sidecar = next(r for r in rows if r.get("sidecar_type") == "critic")
     assert sidecar["critic_action"] == "revise"
     assert sidecar["critic_matched_profiles"] == ["kernel"]
+    assert sidecar["critic_feedback"] == feedback
+    assert sidecar["critic_feedback_hash"]
+    assert "verification_gap" in sidecar["critic_feedback_tags"]
     assert sidecar["input_tokens"] == 10
     assert sidecar["output_tokens"] == 5
     assert sidecar["cached_tokens"] == 0
@@ -98,6 +105,11 @@ async def test_critic_injects_feedback_before_executor(tmp_path):
     assert stats["backends"]["critic"]["kv_written_tokens"] == 15
     assert stats["backends"]["critic"]["requests"] == 1
     assert stats["backends"]["critic"]["ttft_p50_ms"] >= 0
+    assert stats["critic"]["calls"] == 1
+    assert stats["critic"]["revise"] == 1
+    assert stats["critic"]["recent_revise"] == 1
+    assert stats["critic"]["feedback_tags"]["verification_gap"] == 1
+    assert stats["critic"]["feedback_hashes"][sidecar["critic_feedback_hash"]] == 1
 
 
 async def test_critic_approve_does_not_inject_feedback(tmp_path):
