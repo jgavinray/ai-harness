@@ -611,6 +611,33 @@ async def test_verify_state_rejects_edit_even_if_model_emits_it():
     assert "current runtime action state is 'verify'" in str(fake.requests[1])
 
 
+async def test_edit_state_rejects_hidden_bash_even_if_pipeline_has_it():
+    turns = (
+        Turn("user", (TextPart("fix /x"),)),
+        Turn("assistant", (ToolCallPart("r0", "Read", {"file_path": "/x"}),)),
+        Turn("user", (ToolResultPart("r0", "old"),)),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "grep -rn foo /x"}'), finish_chunk("tool_calls")])
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "old", "new_string": "new"}'),
+        finish_chunk("tool_calls"),
+    ])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_edit_tools(turns), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert metrics["allowed_tools"] == ["Read", "Edit"]
+    assert metrics["action_state_blocks"] == 1
+    assert "Call one of these tools now: Read, Edit" in str(fake.requests[1])
+
+
 async def test_preflight_denies_bash_head_when_read_exists():
     read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
     bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)

@@ -14,10 +14,11 @@ from harness.guards import has_unverified_edit
 from harness.ir import Conversation, TextPart, ToolCallPart
 from harness.planning import plan_status
 
-INSPECT_TOOLS = ("Read", "Grep", "Glob", "LS")
+READONLY_TOOLS = ("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch")
+INSPECT_TOOLS = READONLY_TOOLS + ("Bash",)
 EDIT_TOOLS = ("Edit", "MultiEdit")
 CREATE_TOOLS = ("Write", "Bash")
-VERIFY_TOOLS = ("Bash",) + INSPECT_TOOLS
+VERIFY_TOOLS = ("Bash",) + READONLY_TOOLS
 CREATE_WORDS = ("create", "new file", "add file", "write a file")
 VERIFY_WORDS = ("verify", "check", "run tests", "build", "compile", "lint")
 
@@ -93,8 +94,10 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
         return ActionState("verify", VERIFY_TOOLS, requires_tool=True, required_tool="Bash", reason="verify_request")
     if any(word in latest for word in CREATE_WORDS):
         return ActionState("create_file", CREATE_TOOLS, requires_tool=True, reason="create_request")
+    if not settings.pipeline.guard_edit_without_read:
+        return ActionState("edit_existing", EDIT_TOOLS + READONLY_TOOLS, reason="edit_guard_relaxed")
     if _read_seen(conv):
-        return ActionState("edit_existing", EDIT_TOOLS + INSPECT_TOOLS, reason="file_read")
+        return ActionState("edit_existing", EDIT_TOOLS + READONLY_TOOLS, reason="file_read")
     return ActionState("inspect", INSPECT_TOOLS, requires_tool=_has_inspect_intent(latest), reason="no_file_read")
 
 

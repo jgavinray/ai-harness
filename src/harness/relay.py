@@ -165,6 +165,17 @@ def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     return replace(conv, tools=conv.tools + (tool,))
 
 
+def _state_allows_tool(name: str, action_state, settings: Settings) -> bool:
+    if not action_state.allowed_tools:
+        return True
+    if name in action_state.allowed_tools:
+        return True
+    # Skill is a local meta-tool that injects instructions, not a workspace
+    # action. Keep it available for the skill compiler without opening other
+    # hidden tools that the current state did not surface.
+    return name == "Skill" and settings.skills.enabled
+
+
 def _record_preflight(metrics: dict, call: ToolCall, decision) -> None:
     metrics["preflight_decision"] = decision.decision
     metrics["preflight_reason"] = decision.reason
@@ -356,11 +367,7 @@ async def run(
                     if guard is not None and attempts < settings.pipeline.repair_retries:
                         guarded_call = guard
                         break
-                    if (
-                        action_state.name == "verify"
-                        and action_state.allowed_tools
-                        and fixed.name not in action_state.allowed_tools
-                    ):
+                    if not _state_allows_tool(fixed.name, action_state, settings):
                         if attempts < settings.pipeline.repair_retries:
                             action_state_feedback = (
                                 action_state.name,
