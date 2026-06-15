@@ -373,6 +373,27 @@ async def test_preflight_denies_bash_cat_when_read_exists():
     assert "Use the Read tool" in str(fake.requests[1])
 
 
+async def test_agentic_os_mode_allows_bash_cat_when_orchestrator_kept_it():
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("inspect /x"),)),),
+        (read, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "cat /x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    settings = Settings()
+    settings.pipeline.policy_owner = "agentic_os"
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
+    assert len(fake.requests) == 1
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["preflight_denies"] == 0
+
+
 async def test_preflight_denies_write_missing_parent(tmp_path):
     write_schema = {
         "type": "object",

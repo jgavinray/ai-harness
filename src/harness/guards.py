@@ -290,6 +290,7 @@ def preflight_tool_call(
     """Validate or correct a repaired tool call before it reaches the client."""
     original = dict(call.arguments)
     bash_class: str | None = None
+    external_policy = settings.pipeline.policy_owner == "agentic_os"
 
     rewritten, path_rewritten = normalize_confused_paths(call)
     if path_rewritten:
@@ -301,7 +302,7 @@ def preflight_tool_call(
             rewritten_arguments=dict(rewritten.arguments),
         )
     call = rewritten
-    if _repeated_failing_call(conv, call):
+    if not external_policy and _repeated_failing_call(conv, call):
         return PreflightDecision(
             "deny",
             call,
@@ -368,7 +369,11 @@ def preflight_tool_call(
                 original_arguments=original,
                 bash_command_class=bash_class,
             )
-        if _verification_required(conv, settings) and bash_class not in {"build", "test", "verify"}:
+        if (
+            not external_policy
+            and _verification_required(conv, settings)
+            and bash_class not in {"build", "test", "verify"}
+        ):
             return PreflightDecision(
                 "deny",
                 call,
@@ -379,17 +384,18 @@ def preflight_tool_call(
                 original_arguments=original,
                 bash_command_class=bash_class,
             )
-        structured = _structured_tool_feedback(call, conv)
-        if structured is not None:
-            reason, feedback = structured
-            return PreflightDecision(
-                "deny",
-                call,
-                reason,
-                feedback,
-                original_arguments=original,
-                bash_command_class=bash_class,
-            )
+        if not external_policy:
+            structured = _structured_tool_feedback(call, conv)
+            if structured is not None:
+                reason, feedback = structured
+                return PreflightDecision(
+                    "deny",
+                    call,
+                    reason,
+                    feedback,
+                    original_arguments=original,
+                    bash_command_class=bash_class,
+                )
 
     return PreflightDecision("allow", call, original_arguments=original, bash_command_class=bash_class)
 

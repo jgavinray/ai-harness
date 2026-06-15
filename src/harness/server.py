@@ -71,6 +71,60 @@ KV_USAGE_GAUGES = {
 KV_RESIDENT_SESSIONS = 8  # sessions remembered per backend for the estimate
 
 
+def _agentic_os_mode(settings: Settings) -> bool:
+    return settings.pipeline.policy_owner == "agentic_os"
+
+
+def _apply_policy_owner(settings: Settings) -> None:
+    """In bridged mode, agentic-os owns workflow policy.
+
+    Keep ai-harness focused on model-call adaptation: codecs, schema cleanup,
+    history fitting, tool-call repair, backend metrics, traces, and optional
+    externally requested critic execution.
+    """
+    if not _agentic_os_mode(settings):
+        return
+    settings.pipeline.system_prompt = "passthrough"
+    settings.pipeline.tool_prune = False
+    settings.pipeline.tool_catalog = False
+    settings.pipeline.action_state_tools = False
+    settings.pipeline.workflow_guards = False
+    settings.pipeline.guard_edit_without_read = False
+    settings.pipeline.guard_verify_after_edit = False
+    settings.planning.enabled = False
+    settings.memory.enabled = False
+    settings.skills.enabled = False
+    settings.research.enabled = False
+    settings.review.enabled = False
+
+
+def _agentic_critic_requested(request: Request, body: dict) -> bool:
+    values = [
+        request.headers.get("x-agentic-critic"),
+        request.headers.get("x-agentic-critic-eligible"),
+        str((body.get("metadata") or {}).get("agentic_critic", "")),
+    ]
+    return any(
+        value and value.strip().lower() in {"1", "true", "yes", "required", "force", "eligible"}
+        for value in values
+    )
+
+
+def _agentic_metadata(request: Request) -> dict:
+    names = {
+        "x-agentic-policy-id": "agentic_policy_id",
+        "x-agentic-policy-version": "agentic_policy_version",
+        "x-agentic-trajectory-id": "agentic_trajectory_id",
+        "x-agentic-request-id": "agentic_request_id",
+        "x-agentic-context-pack-id": "agentic_context_pack_id",
+    }
+    return {
+        key: value
+        for header, key in names.items()
+        if (value := request.headers.get(header))
+    }
+
+
 def _apply_relaxed(settings: Settings, relaxed: list[str]) -> None:
     """Disable eval-retired scaffolds for the backend handling this request."""
     for item in relaxed:
@@ -530,6 +584,10 @@ def create_app(
         req_settings = settings.model_copy(deep=True)
         req_settings.profile.context_window = chosen.cfg.context_window
         _apply_relaxed(req_settings, chosen.cfg.relaxed)
+        _apply_policy_owner(req_settings)
+        metrics["policy_owner"] = req_settings.pipeline.policy_owner
+        metrics["harness_policy_disabled"] = _agentic_os_mode(req_settings)
+        metrics.update(_agentic_metadata(request))
         conv = run_pipeline(conv, req_settings, stages, metrics)
         metrics["pipeline_tool_count"] = len(conv.tools)
         metrics["pipeline_tool_names"] = [tool.name for tool in conv.tools]
@@ -603,6 +661,8 @@ def create_app(
                     parent_request_id=msg_id,
                     account_usage=account_usage,
                     record_critic=lambda r: _record_critic_stats(stats["critic"], r),
+                    external_policy=_agentic_os_mode(req_settings),
+                    force=_agentic_critic_requested(request, body),
                 )
                 rendered = chosen.profile.render(conv, chosen.model_name)
                 apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)

@@ -37,6 +37,7 @@ capabilities = ["reasoning", "reasoning_budget"]
 max_in_flight = 1
 
 [pipeline]
+policy_owner = "agentic_os"
 system_prompt = "replace"
 tool_prune = true
 max_tools = 8

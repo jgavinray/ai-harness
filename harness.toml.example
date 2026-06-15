@@ -15,6 +15,7 @@ name = "qwen"              # qwen | deepseek_r1 | devstral | gemma
 context_window = 32768
 
 [pipeline]
+policy_owner = "harness"    # harness | agentic_os; agentic_os disables duplicate workflow/policy logic
 system_prompt = "replace"  # replace | compress | passthrough
 tool_prune = true
 tool_catalog = true        # list every tool (1 line each) so the model can call hidden ones (requires tool_prune = true)

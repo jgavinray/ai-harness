@@ -129,6 +129,53 @@ async def test_critic_approve_does_not_inject_feedback(tmp_path):
     assert sidecar["critic_action"] == "approve"
 
 
+async def test_agentic_os_mode_skips_local_critic_eligibility(tmp_path):
+    fake = FakeOpenAI()
+    fake.push([text_chunk("continuing"), finish_chunk("stop")])
+    s = settings(tmp_path)
+    s.pipeline.policy_owner = "agentic_os"
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(s, backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=critic_body())
+        stats = (await client.get("/stats")).json()
+
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
+    assert fake.requests[0]["model"] == "m"
+    assert stats["critic"]["calls"] == 0
+    assert stats["runtime"]["critic_skips"]["external_policy_no_request"] == 1
+
+
+async def test_agentic_os_mode_runs_critic_when_requested(tmp_path):
+    fake = FakeOpenAI()
+    fake.push([text_chunk("REVISE: verify the ABI update."), finish_chunk("stop")])
+    fake.push([text_chunk("I will verify it."), finish_chunk("stop")])
+    s = settings(tmp_path)
+    s.pipeline.policy_owner = "agentic_os"
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(s, backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post(
+            "/v1/messages",
+            json=critic_body(),
+            headers={"x-agentic-critic": "required"},
+        )
+
+    assert resp.status_code == 200
+    assert fake.requests[0]["model"] == "r"
+    assert fake.requests[1]["model"] == "m"
+    assert "Critic feedback" in json.dumps(fake.requests[1])
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    sidecar = next(r for r in rows if r.get("sidecar_type") == "critic")
+    assert sidecar["critic_policy_owner"] == "agentic_os"
+    assert sidecar["critic_forced"] is True
+
+
 async def test_critic_max_tokens_empty_approval_is_inconclusive(tmp_path):
     fake = FakeOpenAI()
     fake.push([text_chunk("APPROVE"), finish_chunk("length")])

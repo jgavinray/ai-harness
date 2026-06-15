@@ -43,10 +43,19 @@ class CriticManager:
         parent_request_id: str | None = None,
         account_usage=None,
         record_critic=None,
+        external_policy: bool = False,
+        force: bool = False,
     ) -> Conversation:
         if not self.cfg.enabled:
             return conv
+        metrics["critic_policy_owner"] = "agentic_os" if external_policy else "harness"
+        if external_policy and not force:
+            metrics["critic_eligible"] = False
+            metrics["critic_skipped_reason"] = "external_policy_no_request"
+            return conv
         evidence = _evidence(conv, self.settings)
+        if force and not evidence["triggers"]:
+            evidence["triggers"] = ["external_policy"]
         metrics["critic_triggered"] = bool(evidence["triggers"])
         metrics["critic_triggers"] = evidence["triggers"]
         metrics["critic_matched_profiles"] = evidence["matched_profiles"]
@@ -54,7 +63,7 @@ class CriticManager:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = "no_triggers"
             return conv
-        deterministic_skip = _deterministic_skip_reason(evidence, metrics)
+        deterministic_skip = None if force else _deterministic_skip_reason(evidence, metrics)
         if deterministic_skip:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = deterministic_skip
@@ -125,6 +134,8 @@ class CriticManager:
             "model": backend.model_name,
             "role": "critic",
             "critic_action": action,
+            "critic_policy_owner": metrics["critic_policy_owner"],
+            "critic_forced": force,
             "critic_triggers": evidence["triggers"],
             "critic_matched_profiles": evidence["matched_profiles"],
             "critic_feedback": feedback,

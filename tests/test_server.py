@@ -29,6 +29,27 @@ EDIT_TOOL = {
         "required": ["file_path", "old_string", "new_string"],
     },
 }
+BASH_TOOL = {
+    "name": "Bash",
+    "description": "Runs a shell command",
+    "input_schema": {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    },
+}
+GREP_TOOL = {
+    "name": "Grep",
+    "description": "Searches files",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+        },
+        "required": ["pattern"],
+    },
+}
 
 
 def request_body(stream: bool = True, system=None, tools=None) -> dict:
@@ -140,6 +161,35 @@ async def test_non_streaming():
     # usage must survive even though the client didn't stream
     assert body["usage"]["input_tokens"] == 10
     assert body["usage"]["output_tokens"] == 5
+
+
+async def test_agentic_os_mode_preserves_policy_prompt_and_tool_menu():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.pipeline.policy_owner = "agentic_os"
+    settings.pipeline.max_tools = 1
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    body = request_body(
+        stream=False,
+        system="You are Claude Code\n\n## Agentic OS policy\nUse only the provided scope.",
+        tools=[READ_TOOL, EDIT_TOOL, BASH_TOOL, GREP_TOOL],
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+        stats = (await client.get("/stats")).json()
+
+    assert resp.status_code == 200
+    rendered = json.dumps(fake.requests[0])
+    assert "You are Claude Code" in rendered
+    assert "Agentic OS policy" in rendered
+    assert "expert software engineering agent" not in rendered
+    assert len(fake.requests[0]["tools"]) == 4
+    assert stats["runtime"]["latest_pipeline_tool_count"] == 4
 
 
 async def test_count_tokens_no_backend_call():

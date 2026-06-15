@@ -42,6 +42,7 @@ dump_prompts = false
 enabled = true
 
 [pipeline]
+policy_owner = "agentic_os"
 system_prompt = "replace"
 tool_prune = true
 max_tools = 8

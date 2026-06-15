@@ -5,6 +5,7 @@ def test_defaults():
     s = Settings()
     assert s.server.port == 8484
     assert s.pipeline.system_prompt == "replace"
+    assert s.pipeline.policy_owner == "harness"
     assert s.pipeline.max_tools == 8
     assert s.pipeline.repair_retries == 2
     assert s.pipeline.compact_at_ratio == 0.80
@@ -26,3 +27,10 @@ def test_load_toml(tmp_path):
 def test_load_missing_path_gives_defaults(tmp_path):
     s = load_settings(tmp_path / "nope.toml")
     assert s.backend.kind == "openai"
+
+
+def test_load_agentic_os_policy_owner(tmp_path):
+    p = tmp_path / "harness.toml"
+    p.write_text('[pipeline]\npolicy_owner = "agentic_os"\n')
+    s = load_settings(p)
+    assert s.pipeline.policy_owner == "agentic_os"

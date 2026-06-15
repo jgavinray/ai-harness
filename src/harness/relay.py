@@ -271,6 +271,12 @@ async def run(
         required_tool = action_state.required_tool
         if effective_requires_tool and required_tool is None and len(payload_conv.tools) == 1:
             required_tool = payload_conv.tools[0].name
+        if (
+            settings.pipeline.policy_owner == "agentic_os"
+            and required_tool is None
+            and len(payload_conv.tools) == 1
+        ):
+            required_tool = payload_conv.tools[0].name
         if not attempts and backend.constrained and required_tool:
             required = next(
                 (t for t in conv.tools if t.name == required_tool),

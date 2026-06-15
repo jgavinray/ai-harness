@@ -112,7 +112,7 @@ class MemoryStage:
         self.settings = settings
 
     def apply(self, conv: Conversation, settings: Settings) -> Conversation:
-        if not self.settings.memory.enabled or HEADER in conv.system:
+        if not settings.memory.enabled or HEADER in conv.system:
             return conv
         mem = self.manager.read(project_key(conv.system))
         if not mem:

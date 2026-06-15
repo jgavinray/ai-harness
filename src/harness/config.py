@@ -1,5 +1,6 @@
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -36,6 +37,7 @@ class PoolBackendCfg(BackendCfg):
 
 
 class PipelineCfg(BaseModel):
+    policy_owner: Literal["harness", "agentic_os"] = "harness"
     system_prompt: str = "replace"  # replace | compress | passthrough
     tool_prune: bool = True
     tool_catalog: bool = True  # list the full tool inventory in the system prompt
