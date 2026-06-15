@@ -50,6 +50,7 @@
     <dt>ctx tok</dt><dd>Latest request context tokens before and after pipeline compaction.</dd>
     <dt>state blocks</dt><dd>Free-text completions blocked because the current runtime action state required a tool call.</dd>
     <dt>critic skip</dt><dd>Requests where qwen80 critic was not called because deterministic runtime handling was enough or no critic trigger existed.</dd>
+    <dt>tools in/pipe/out</dt><dd>Latest per-call tool schema counts: client sent to harness, after pipeline pruning, and backend-visible after runtime action shaping.</dd>
     <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
     <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
@@ -91,6 +92,8 @@ async function tick() {
       ["state blocks", s.runtime ? fmt(s.runtime.action_state_blocks) : "–"],
       ["critic skip", s.runtime ? fmt(Object.values(s.runtime.critic_skips || {}).reduce((a, b) => a + b, 0)) : "–",
         s.runtime ? `${fmt(s.runtime.critic_saved_turn_estimate)} saved est.` : ""],
+      ["tools in/pipe/out", s.runtime ? `${fmt(s.runtime.latest_client_tool_count)} / ${fmt(s.runtime.latest_pipeline_tool_count)} / ${fmt(s.runtime.latest_backend_tool_count)}` : "–",
+        s.runtime ? `avg ${s.runtime.client_tool_count_avg} / ${s.runtime.pipeline_tool_count_avg} / ${s.runtime.backend_tool_count_avg}` : ""],
     ];
     document.getElementById("cards").innerHTML = cards
       .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)

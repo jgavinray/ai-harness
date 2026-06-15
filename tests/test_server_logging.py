@@ -42,6 +42,12 @@ async def test_request_logged_with_metrics(tmp_path):
     assert rec["context_tokens_before"] >= rec["context_tokens_after"]
     assert rec["action_state"] == "inspect"
     assert rec["allowed_tools"] == ["Read"]
+    assert rec["client_tool_count"] == 1
+    assert rec["client_tool_names"] == ["Read"]
+    assert rec["pipeline_tool_count"] == 1
+    assert rec["pipeline_tool_names"] == ["Read"]
+    assert rec["backend_tool_count"] == 1
+    assert rec["backend_tool_names"] == ["Read"]
 
 
 async def test_no_log_when_disabled(tmp_path):

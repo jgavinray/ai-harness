@@ -129,6 +129,27 @@ async def test_critic_approve_does_not_inject_feedback(tmp_path):
     assert sidecar["critic_action"] == "approve"
 
 
+async def test_critic_max_tokens_empty_approval_is_inconclusive(tmp_path):
+    fake = FakeOpenAI()
+    fake.push([text_chunk("APPROVE"), finish_chunk("length")])
+    fake.push([text_chunk("continuing"), finish_chunk("stop")])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings(tmp_path), backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=critic_body())
+        stats = (await client.get("/stats")).json()
+    assert resp.status_code == 200
+    assert "Critic feedback" not in json.dumps(fake.requests[1])
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    sidecar = next(r for r in rows if r.get("sidecar_type") == "critic")
+    assert sidecar["critic_action"] == "inconclusive"
+    assert sidecar["critic_inconclusive_reason"] == "max_tokens_without_feedback"
+    assert stats["critic"]["inconclusive"] == 1
+    assert stats["critic"]["inconclusive_reasons"]["max_tokens_without_feedback"] == 1
+
+
 async def test_critic_degrades_without_backend():
     fake = FakeOpenAI()
     fake.push([text_chunk("continuing"), finish_chunk("stop")])
@@ -192,3 +213,49 @@ async def test_critic_skips_deterministic_path_alias(tmp_path):
     assert record["critic_saved_turn_estimate"] == 1
     assert stats["critic"]["calls"] == 0
     assert stats["runtime"]["critic_skips"]["path_alias"] == 1
+
+
+async def test_critic_skips_gateguard_fact_force(tmp_path):
+    body = request_body(stream=False, tools=[EDIT_TOOL])
+    body["messages"] = [
+        {"role": "user", "content": "Refactor drivers/net/foo.c"},
+        {
+            "role": "assistant",
+            "content": [{
+                "id": "e1",
+                "type": "tool_use",
+                "name": "Edit",
+                "input": {
+                    "file_path": "drivers/net/foo.c",
+                    "old_string": "int old_sig(void)",
+                    "new_string": "int new_sig(int flags)",
+                },
+            }],
+        },
+        {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "e1",
+                "is_error": True,
+                "content": "ERROR: [Fact-Forcing Gate]\n\nBefore editing drivers/net/foo.c, present these facts.",
+            }],
+        },
+    ]
+    fake = FakeOpenAI()
+    fake.push([text_chunk("continuing"), finish_chunk("stop")])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings(tmp_path), backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+        stats = (await client.get("/stats")).json()
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    record = rows[0]
+    assert record["critic_eligible"] is False
+    assert record["critic_skipped_reason"] == "gateguard_fact_force"
+    assert stats["critic"]["calls"] == 0
+    assert stats["runtime"]["critic_skips"]["gateguard_fact_force"] == 1

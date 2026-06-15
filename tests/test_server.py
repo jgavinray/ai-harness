@@ -193,6 +193,9 @@ async def test_stats():
         resp = await client.get("/stats")
     assert resp.json()["requests"] == 1
     assert resp.json()["runtime"]["invalid_tool_rate_pct"] == 0.0
+    assert resp.json()["runtime"]["latest_client_tool_count"] == 1
+    assert resp.json()["runtime"]["latest_pipeline_tool_count"] == 1
+    assert resp.json()["runtime"]["latest_backend_tool_count"] == 1
 
 
 async def test_stats_records_preflight_success_outcome():
@@ -256,6 +259,25 @@ async def test_pipeline_applied_end_to_end():
     assert len(sent["tools"]) <= 8
 
 
+async def test_path_alias_canonicalized_before_backend_prompt():
+    body = request_body(stream=False, tools=[READ_TOOL])
+    body["messages"] = [{"role": "user", "content": "Read /Users/jgavinray/dev-pr/src/main.c"}]
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    app = create_app(settings, backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+    assert resp.status_code == 200
+    rendered = json.dumps(fake.requests[0])
+    assert "/Users/jgavinray/dev-pr" not in rendered
+    assert "/Users/jgavinray/dev/pr/src/main.c" in rendered
+
+
 async def test_planning_scaffold_generated_once_and_injected():
     fake = FakeOpenAI()
     fake.push([
@@ -277,7 +299,8 @@ async def test_planning_scaffold_generated_once_and_injected():
     async with client:
         resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
         assert resp.status_code == 200
-        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        followup = request_body(stream=False, tools=[])
+        resp = await client.post("/v1/messages", json=followup)
         assert resp.status_code == 200
 
     assert len(fake.requests) == 3

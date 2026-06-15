@@ -54,7 +54,7 @@ class CriticManager:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = "no_triggers"
             return conv
-        deterministic_skip = _deterministic_skip_reason(evidence)
+        deterministic_skip = _deterministic_skip_reason(evidence, metrics)
         if deterministic_skip:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = deterministic_skip
@@ -103,7 +103,8 @@ class CriticManager:
             metrics["critic_error"] = str(exc)
             return conv
         feedback = _feedback(text)
-        action = "revise" if feedback else "approve"
+        inconclusive_reason = _inconclusive_reason(text, done)
+        action = "revise" if feedback else ("inconclusive" if inconclusive_reason else "approve")
         observed = HeuristicCounter().count_text(thinking) if thinking else 0
         feedback_tags = _feedback_tags(feedback)
         metrics.update({
@@ -111,6 +112,8 @@ class CriticManager:
             "critic_reasoning_budget_sent": side_metrics.get("reasoning_budget_sent"),
             "critic_reasoning_tokens_observed": observed,
         })
+        if inconclusive_reason:
+            metrics["critic_inconclusive_reason"] = inconclusive_reason
         if account_usage:
             account_usage(backend, done, key, count_request=True, ttft_ms=ttft_ms)
         sidecar_record = {
@@ -127,6 +130,7 @@ class CriticManager:
             "critic_feedback": feedback,
             "critic_feedback_hash": _feedback_hash(feedback) if feedback else None,
             "critic_feedback_tags": feedback_tags,
+            "critic_inconclusive_reason": inconclusive_reason,
             "wall_ms": int((time.monotonic() - start) * 1000),
             "ttft_ms": ttft_ms,
             "input_tokens": done.input_tokens,
@@ -210,14 +214,18 @@ def _fingerprint(evidence: dict) -> str:
     return hashlib.sha1(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
 
 
-def _deterministic_skip_reason(evidence: dict) -> str | None:
-    triggers = set(evidence.get("triggers") or [])
-    if triggers - {"tool_error", "risky_path"}:
-        return None
+def _deterministic_skip_reason(evidence: dict, metrics: dict | None = None) -> str | None:
     text = "\n".join(
         (evidence.get("paths") or [])
         + (evidence.get("recent_results") or [])
     ).lower()
+    if "fact-forcing gate" in text or "gateguard" in text:
+        return "gateguard_fact_force"
+    triggers = set(evidence.get("triggers") or [])
+    if triggers - {"tool_error", "risky_path"}:
+        return None
+    if metrics and metrics.get("path_canonicalized"):
+        return "path_alias"
     if BAD_DEV_PR_PREFIX.lower() in text or (
         "dev-pr" in text and GOOD_DEV_PR_PREFIX.lower() not in text
     ):
@@ -271,6 +279,14 @@ def _feedback(text: str) -> str:
     if lowered.startswith("approve") or lowered.startswith("no-op") or lowered == "ok":
         return ""
     return text
+
+
+def _inconclusive_reason(text: str, done: Done) -> str | None:
+    if done.stop_reason != "max_tokens":
+        return None
+    if _feedback(text):
+        return None
+    return "max_tokens_without_feedback"
 
 
 def _feedback_hash(feedback: str) -> str:

@@ -504,6 +504,136 @@ async def test_done_claim_after_edit_requires_verification():
     assert metrics["guard_fires"]["verify_after_edit"] == 1
 
 
+async def test_verify_state_denies_non_verification_bash():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "git branch --show-current"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([tool_chunk("b2", "Bash", '{"command": "make test"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_after_unverified_edit(), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert len(fake.requests) == 2
+    assert not any(
+        isinstance(e, ToolCall) and e.arguments.get("command") == "git branch --show-current"
+        for e in evs
+    )
+    assert any(
+        isinstance(e, ToolCall) and e.arguments.get("command") == "make test"
+        for e in evs
+    )
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["non_verification_command"] == 1
+    assert metrics["preflight_events"][0]["bash_command_class"] == "inspect"
+    assert "requires real verification" in str(fake.requests[1])
+
+
+async def test_effort_testing_text_does_not_make_bash_verification_required():
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("Set effort level to high: Comprehensive implementation with extensive testing and documentation"),)),),
+        (bash,),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "ls /tmp"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["preflight_denies"] == 0
+    assert metrics["action_state"] == "inspect"
+
+
+async def test_verify_state_accepts_compiler_build_command():
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "gcc -o app main.o"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_after_unverified_edit(), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert any(isinstance(e, ToolCall) and e.arguments.get("command") == "gcc -o app main.o" for e in evs)
+    assert metrics["preflight_denies"] == 0
+    assert metrics["preflight_events"][0]["bash_command_class"] == "build"
+
+
+async def test_verify_state_allows_read_only_inspection():
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_after_unverified_edit(), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert len(fake.requests) == 1
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert metrics["action_state_blocks"] == 0
+
+
+async def test_verify_state_rejects_edit_even_if_model_emits_it():
+    turns = (
+        Turn("user", (TextPart("fix /x"),)),
+        Turn("assistant", (ToolCallPart("r1", "Read", {"file_path": "/x"}),)),
+        Turn("user", (ToolResultPart("r1", "contents"),)),
+        Turn("assistant", (ToolCallPart("e0", "Edit", {
+            "file_path": "/x", "old_string": "a", "new_string": "b",
+        }),)),
+        Turn("user", (ToolResultPart("e0", "edited"),)),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_edit_tools(turns), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["action_state_blocks"] == 1
+    assert "current runtime action state is 'verify'" in str(fake.requests[1])
+
+
+async def test_preflight_denies_bash_head_when_read_exists():
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("inspect /plan.md"),)),),
+        (read, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "head -121 /plan.md"}'), finish_chunk("tool_calls")])
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/plan.md"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["use_read_tool"] == 1
+    assert "instead of Bash head" in str(fake.requests[1])
+
+
 def conv_with_plan(system_status: str) -> Conversation:
     return Conversation(
         "sys\n\n## Execution plan\n1. Inspect\n2. Run tests\n3. Finish\n" + system_status,

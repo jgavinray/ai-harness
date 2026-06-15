@@ -6,6 +6,7 @@ describes which tool surface is mechanically legal for the next backend call.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 from harness.config import Settings
@@ -16,9 +17,9 @@ from harness.planning import plan_status
 INSPECT_TOOLS = ("Read", "Grep", "Glob", "LS")
 EDIT_TOOLS = ("Edit", "MultiEdit")
 CREATE_TOOLS = ("Write", "Bash")
-VERIFY_TOOLS = ("Bash",)
+VERIFY_TOOLS = ("Bash",) + INSPECT_TOOLS
 CREATE_WORDS = ("create", "new file", "add file", "write a file")
-VERIFY_WORDS = ("verify", "test", "check", "run tests", "build")
+VERIFY_WORDS = ("verify", "check", "run tests", "build", "compile", "lint")
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,20 @@ def _read_seen(conv: Conversation) -> bool:
 
 
 def _is_verify_step(step: str) -> bool:
-    lowered = step.lower()
-    return any(word in lowered for word in VERIFY_WORDS)
+    return _has_verify_intent(step.lower())
+
+
+def _has_verify_intent(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(verify|check|build|compile|lint)\b|\brun(?:ning)?\s+(?:the\s+)?tests?\b",
+            text,
+        )
+    )
+
+
+def _has_inspect_intent(text: str) -> bool:
+    return bool(re.search(r"\b(read|inspect|review|search|find|open|list)\b|look at", text))
 
 
 def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
@@ -76,13 +89,13 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
         )
 
     latest = _latest_user_text(conv)
-    if any(word in latest for word in VERIFY_WORDS):
+    if _has_verify_intent(latest):
         return ActionState("verify", VERIFY_TOOLS, requires_tool=True, required_tool="Bash", reason="verify_request")
     if any(word in latest for word in CREATE_WORDS):
         return ActionState("create_file", CREATE_TOOLS, requires_tool=True, reason="create_request")
     if _read_seen(conv):
         return ActionState("edit_existing", EDIT_TOOLS + INSPECT_TOOLS, reason="file_read")
-    return ActionState("inspect", INSPECT_TOOLS, requires_tool=True, reason="no_file_read")
+    return ActionState("inspect", INSPECT_TOOLS, requires_tool=_has_inspect_intent(latest), reason="no_file_read")
 
 
 def shape_tools_for_state(conv: Conversation, state: ActionState) -> Conversation:

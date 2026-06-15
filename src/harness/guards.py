@@ -19,10 +19,33 @@ from harness.ir import Conversation, ToolCall, ToolCallPart
 from harness.planning import plan_status
 
 EDIT_TOOLS = {"Edit", "MultiEdit"}
-VERIFY_WORDS = ("pytest", "test", "check", "npm test", "cargo test", "go test")
+VERIFY_WORDS = (
+    "pytest",
+    "test",
+    "check",
+    "npm test",
+    "cargo test",
+    "go test",
+    "lint",
+    "compile",
+)
 DONE_WORDS = ("done", "fixed", "complete", "completed", "implemented", "finished")
 VERIFY_STEP_WORDS = ("verify", "test", "check", "run")
-BUILD_WORDS = ("make", "cmake", "ninja", "cargo build", "npm run build", "go build")
+BUILD_WORDS = (
+    "make",
+    "cmake",
+    "ninja",
+    "cargo build",
+    "npm run build",
+    "go build",
+    "gcc",
+    "clang",
+    "g++",
+    "rustc",
+    "ld ",
+)
+INSPECT_EXECUTABLES = {"cat", "grep", "rg", "sed", "ls", "find", "pwd", "head", "tail", "wc", "nl"}
+NO_PROGRESS_EXECUTABLES = {"echo", "printf", "true", "false", ":"}
 DANGEROUS_PATTERNS = (
     r"\brm\s+-rf\b",
     r"\bsudo\b",
@@ -130,17 +153,76 @@ def classify_bash_command(command: str) -> str:
     except ValueError:
         tokens = []
     executable = Path(tokens[0]).name if tokens else ""
+    if executable in NO_PROGRESS_EXECUTABLES:
+        return "no_progress"
     if executable == "mkdir":
         return "create_dir"
-    if executable in {"cat", "grep", "rg", "sed", "ls", "find", "pwd"}:
-        return "inspect"
+    if executable == "git" and len(tokens) > 2 and tokens[1] == "diff" and "--check" in tokens[2:]:
+        return "verify"
     if any(word in lowered for word in BUILD_WORDS):
         return "build"
     if any(word in lowered for word in ("pytest", "npm test", "cargo test", "go test")):
         return "test"
     if any(word in lowered for word in VERIFY_WORDS):
         return "verify"
+    if executable in INSPECT_EXECUTABLES:
+        return "inspect"
+    if executable == "git" and len(tokens) > 1 and tokens[1] in {
+        "branch",
+        "status",
+        "rev-parse",
+        "log",
+        "show",
+        "worktree",
+    }:
+        return "inspect"
     return "unknown"
+
+
+def _latest_user_text(conv: Conversation) -> str:
+    for turn in reversed(conv.turns):
+        if turn.role != "user":
+            continue
+        texts = []
+        for part in turn.parts:
+            text = getattr(part, "text", None)
+            if isinstance(text, str):
+                texts.append(text)
+        if texts:
+            return "\n".join(texts).lower()
+    return ""
+
+
+def _has_verify_intent(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(verify|check|build|compile|lint)\b|\brun(?:ning)?\s+(?:the\s+)?tests?\b",
+            text,
+        )
+    )
+
+
+def _verification_required(conv: Conversation, settings: Settings) -> bool:
+    if has_unverified_edit(conv):
+        return True
+    plan = plan_status(conv.system)
+    if settings.planning.enabled and plan is not None and _is_verify_step(plan[2]):
+        return True
+    latest = _latest_user_text(conv)
+    return _has_verify_intent(latest)
+
+
+def _first_path_token(tokens: list[str]) -> str | None:
+    for token in tokens[1:]:
+        if not token or token.startswith("-"):
+            continue
+        if token.isdigit():
+            continue
+        if token in {"|", "&&", "||", ";"}:
+            continue
+        if "/" in token or Path(token).suffix:
+            return token
+    return None
 
 
 def _structured_tool_feedback(call: ToolCall, conv: Conversation) -> tuple[str, str] | None:
@@ -156,11 +238,14 @@ def _structured_tool_feedback(call: ToolCall, conv: Conversation) -> tuple[str, 
     if not tokens:
         return None
     executable = Path(tokens[0]).name
-    if executable == "cat" and len(tokens) >= 2 and _has_tool(conv, "Read"):
+    if executable in {"cat", "head", "tail", "sed", "wc", "nl"} and _has_tool(conv, "Read"):
+        path = _first_path_token(tokens)
+        if path is None and len(tokens) >= 2:
+            path = tokens[-1]
         return (
             "use_read_tool",
-            "Use the Read tool for file inspection instead of Bash cat. "
-            f"Call Read with file_path={tokens[1]!r}.",
+            f"Use the Read tool for file inspection instead of Bash {executable}. "
+            f"Call Read with file_path={path!r}.",
         )
     if executable in {"grep", "rg"} and _has_tool(conv, "Grep"):
         return (
@@ -204,6 +289,7 @@ def preflight_tool_call(
 ) -> PreflightDecision:
     """Validate or correct a repaired tool call before it reaches the client."""
     original = dict(call.arguments)
+    bash_class: str | None = None
 
     rewritten, path_rewritten = normalize_confused_paths(call)
     if path_rewritten:
@@ -282,6 +368,17 @@ def preflight_tool_call(
                 original_arguments=original,
                 bash_command_class=bash_class,
             )
+        if _verification_required(conv, settings) and bash_class not in {"build", "test", "verify"}:
+            return PreflightDecision(
+                "deny",
+                call,
+                "non_verification_command",
+                "The current runtime state requires real verification after an edit or verify request. "
+                "Run a project test, build, compile, lint, or check command. Do not use no-op or "
+                "inspection commands such as echo, pwd, ls, head, wc, or git branch as verification.",
+                original_arguments=original,
+                bash_command_class=bash_class,
+            )
         structured = _structured_tool_feedback(call, conv)
         if structured is not None:
             reason, feedback = structured
@@ -294,7 +391,7 @@ def preflight_tool_call(
                 bash_command_class=bash_class,
             )
 
-    return PreflightDecision("allow", call, original_arguments=original)
+    return PreflightDecision("allow", call, original_arguments=original, bash_command_class=bash_class)
 
 def _read_files(conv: Conversation) -> set[str]:
     out: set[str] = set()
@@ -307,8 +404,7 @@ def _read_files(conv: Conversation) -> set[str]:
     return out
 
 def is_verification_command(command: str) -> bool:
-    lowered = command.lower()
-    return any(word in lowered for word in VERIFY_WORDS)
+    return classify_bash_command(command) in {"build", "test", "verify"}
 
 def has_unverified_edit(conv: Conversation) -> bool:
     edited = False
@@ -379,5 +475,4 @@ def guard_done_claim(
     return None
 
 def _is_verify_step(step: str) -> bool:
-    lowered = step.lower()
-    return any(word in lowered for word in VERIFY_STEP_WORDS)
+    return _has_verify_intent(step.lower())

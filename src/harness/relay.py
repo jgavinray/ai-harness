@@ -253,6 +253,8 @@ async def run(
             if tool is not None:
                 payload_conv = replace(payload_conv, tools=payload_conv.tools + (tool,))
         m["allowed_tools"] = [tool.name for tool in payload_conv.tools]
+        m["backend_tool_count"] = len(payload_conv.tools)
+        m["backend_tool_names"] = [tool.name for tool in payload_conv.tools]
         payload = profile.render(payload_conv, model_name)
         apply_reasoning_budget(payload, settings, backend, role, body or {}, payload_conv, m)
         required_tool = action_state.required_tool
@@ -354,6 +356,23 @@ async def run(
                     if guard is not None and attempts < settings.pipeline.repair_retries:
                         guarded_call = guard
                         break
+                    if (
+                        action_state.name == "verify"
+                        and action_state.allowed_tools
+                        and fixed.name not in action_state.allowed_tools
+                    ):
+                        if attempts < settings.pipeline.repair_retries:
+                            action_state_feedback = (
+                                action_state.name,
+                                [tool.name for tool in payload_conv.tools],
+                            )
+                            break
+                        m["invalid_calls"] += 1
+                        yield TextDelta(
+                            f"\n[action state denied {fixed.name}: expected "
+                            f"{', '.join(action_state.allowed_tools)}]\n"
+                        )
+                        continue
                     seen = _repeat_count(conv, fixed)
                     if seen >= LOOP_THRESHOLD and attempts < settings.pipeline.repair_retries:
                         loop_call, loop_seen = fixed, seen

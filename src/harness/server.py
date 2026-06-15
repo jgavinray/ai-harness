@@ -39,6 +39,7 @@ from harness.reasoning_budget import apply_reasoning_budget
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
+from harness.pipeline.path_canon import PathCanonStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
@@ -47,6 +48,7 @@ from harness.tokens.counter import HeuristicCounter, count_conversation
 from harness.traces import TraceStore
 
 STAGES = [
+    PathCanonStage(),
     SystemPromptStage(),
     ToolPruneStage(),
     ToolSchemaStage(),
@@ -163,6 +165,7 @@ def _empty_critic_stats() -> dict:
         "calls": 0,
         "approve": 0,
         "revise": 0,
+        "inconclusive": 0,
         "errors": 0,
         "input_tokens": 0,
         "output_tokens": 0,
@@ -171,6 +174,7 @@ def _empty_critic_stats() -> dict:
         "profiles": {},
         "feedback_tags": {},
         "feedback_hashes": {},
+        "inconclusive_reasons": {},
         "recent": [],
     }
 
@@ -195,6 +199,19 @@ def _empty_runtime_stats() -> dict:
         "action_state_blocks": 0,
         "critic_skips": {},
         "critic_saved_turn_estimate": 0,
+        "tool_count_samples": 0,
+        "client_tools_total": 0,
+        "pipeline_tools_total": 0,
+        "backend_tools_total": 0,
+        "latest_client_tool_count": None,
+        "latest_pipeline_tool_count": None,
+        "latest_backend_tool_count": None,
+        "max_client_tool_count": 0,
+        "max_pipeline_tool_count": 0,
+        "max_backend_tool_count": 0,
+        "client_tool_count_hist": {},
+        "pipeline_tool_count_hist": {},
+        "backend_tool_count_hist": {},
     }
 
 
@@ -213,6 +230,8 @@ def _record_critic_stats(critic_stats: dict, record: dict) -> None:
         critic_stats["approve"] += 1
     elif action == "revise":
         critic_stats["revise"] += 1
+    elif action == "inconclusive":
+        critic_stats["inconclusive"] += 1
     if record.get("error"):
         critic_stats["errors"] += 1
     critic_stats["input_tokens"] += record.get("input_tokens") or 0
@@ -226,12 +245,14 @@ def _record_critic_stats(critic_stats: dict, record: dict) -> None:
         _inc_counter(critic_stats["feedback_tags"], tag)
     if record.get("critic_feedback_hash"):
         _inc_counter(critic_stats["feedback_hashes"], record["critic_feedback_hash"])
+    _inc_counter(critic_stats["inconclusive_reasons"], record.get("critic_inconclusive_reason"))
     critic_stats["recent"].append({
         "action": action,
         "triggers": record.get("critic_triggers") or [],
         "profiles": record.get("critic_matched_profiles") or [],
         "feedback_tags": record.get("critic_feedback_tags") or [],
         "feedback_hash": record.get("critic_feedback_hash"),
+        "inconclusive_reason": record.get("critic_inconclusive_reason"),
         "parent_request_id": record.get("parent_request_id"),
     })
     del critic_stats["recent"][:-CRITIC_WINDOW]
@@ -240,6 +261,7 @@ def _record_critic_stats(critic_stats: dict, record: dict) -> None:
 def _critic_summary(critic_stats: dict) -> dict:
     recent = critic_stats["recent"]
     recent_revise = sum(1 for r in recent if r.get("action") == "revise")
+    recent_inconclusive = sum(1 for r in recent if r.get("action") == "inconclusive")
     repeated = {
         k: v for k, v in critic_stats["feedback_hashes"].items()
         if v > 1
@@ -250,6 +272,8 @@ def _critic_summary(critic_stats: dict) -> dict:
         "recent_calls": len(recent),
         "recent_revise": recent_revise,
         "recent_revise_pct": round(100 * recent_revise / (len(recent) or 1), 1),
+        "recent_inconclusive": recent_inconclusive,
+        "recent_inconclusive_pct": round(100 * recent_inconclusive / (len(recent) or 1), 1),
         "repeated_feedback_hashes": repeated,
     }
 
@@ -276,14 +300,32 @@ def _record_runtime_stats(runtime_stats: dict, record: dict) -> None:
     runtime_stats["action_state_blocks"] += record.get("action_state_blocks") or 0
     _inc_counter(runtime_stats["critic_skips"], record.get("critic_skipped_reason"))
     runtime_stats["critic_saved_turn_estimate"] += record.get("critic_saved_turn_estimate") or 0
+    if record.get("client_tool_count") is not None:
+        runtime_stats["tool_count_samples"] += 1
+        for prefix, key in (
+            ("client", "client_tool_count"),
+            ("pipeline", "pipeline_tool_count"),
+            ("backend", "backend_tool_count"),
+        ):
+            value = record.get(key)
+            if value is None:
+                continue
+            runtime_stats[f"{prefix}_tools_total"] += value
+            runtime_stats[f"latest_{key}"] = value
+            runtime_stats[f"max_{key}"] = max(runtime_stats[f"max_{key}"], value)
+            _inc_counter(runtime_stats[f"{key}_hist"], str(value))
 
 
 def _runtime_summary(runtime_stats: dict) -> dict:
     total_tool_calls = runtime_stats["valid_calls"] + runtime_stats["invalid_calls"]
     invalid_rate = round(100 * runtime_stats["invalid_calls"] / (total_tool_calls or 1), 1)
+    tool_samples = runtime_stats["tool_count_samples"] or 1
     return {
         **runtime_stats,
         "invalid_tool_rate_pct": invalid_rate,
+        "client_tool_count_avg": round(runtime_stats["client_tools_total"] / tool_samples, 1),
+        "pipeline_tool_count_avg": round(runtime_stats["pipeline_tools_total"] / tool_samples, 1),
+        "backend_tool_count_avg": round(runtime_stats["backend_tools_total"] / tool_samples, 1),
         "context_tokens_before_avg": round(
             runtime_stats["context_tokens_before_total"] / (runtime_stats["context_samples"] or 1)
         ),
@@ -455,6 +497,8 @@ def create_app(
             return invalid_request(f"could not decode request: {exc!r}")
         skey = session_key(body)
         metrics: dict = {}
+        metrics["client_tool_count"] = len(conv.tools)
+        metrics["client_tool_names"] = [tool.name for tool in conv.tools]
         metrics.setdefault("tool_success_after_preflight", 0)
         metrics.setdefault("tool_failure_after_preflight", 0)
         metrics.setdefault("tool_results_after_preflight", [])
@@ -487,6 +531,9 @@ def create_app(
         req_settings.profile.context_window = chosen.cfg.context_window
         _apply_relaxed(req_settings, chosen.cfg.relaxed)
         conv = run_pipeline(conv, req_settings, stages, metrics)
+        metrics["pipeline_tool_count"] = len(conv.tools)
+        metrics["pipeline_tool_names"] = [tool.name for tool in conv.tools]
+        metrics["pipeline_all_tool_count"] = len(conv.all_tools or conv.tools)
         rendered = chosen.profile.render(conv, chosen.model_name)
         apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
         _dump(settings, "rendered-payload", rendered)
