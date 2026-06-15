@@ -195,6 +195,45 @@ async def test_stats():
     assert resp.json()["runtime"]["invalid_tool_rate_pct"] == 0.0
 
 
+async def test_stats_records_preflight_success_outcome():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("c1", "Read", '{"file_path": "/Users/jgavinray/dev-pr/src/main.c"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    body = request_body(stream=False, tools=[READ_TOOL])
+    async with make_client(fake) as client:
+        first = await client.post("/v1/messages", json=body)
+        assert first.status_code == 200
+        followup = request_body(stream=False, tools=[READ_TOOL])
+        followup["messages"] = [
+            body["messages"][0],
+            {
+                "role": "assistant",
+                "content": [{
+                    "id": "c1",
+                    "type": "tool_use",
+                    "name": "Read",
+                    "input": {"file_path": "/Users/jgavinray/dev/pr/src/main.c"},
+                }],
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "c1",
+                    "content": "ok",
+                }],
+            },
+        ]
+        await client.post("/v1/messages", json=followup)
+        stats = (await client.get("/stats")).json()
+    assert stats["runtime"]["preflight_rewrites"] == 1
+    assert stats["runtime"]["tool_success_after_preflight"] == 1
+    assert stats["runtime"]["tool_failure_after_preflight"] == 0
+
+
 async def test_pipeline_applied_end_to_end():
     fake = FakeOpenAI()
     fake.push([text_chunk("ok"), finish_chunk("stop")])

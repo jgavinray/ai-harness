@@ -29,7 +29,7 @@ from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
 from harness.config import Settings, load_settings
 from harness.critic import CriticManager
-from harness.ir import Done, ThinkingDelta
+from harness.ir import Done, ThinkingDelta, ToolResultPart
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
 from harness.planning import PlanningManager
@@ -182,6 +182,8 @@ def _empty_runtime_stats() -> dict:
         "preflight_rewrites": 0,
         "preflight_denies": 0,
         "preflight_reasons": {},
+        "tool_success_after_preflight": 0,
+        "tool_failure_after_preflight": 0,
         "context_compactions": 0,
         "turns_elided": 0,
         "tool_results_truncated": 0,
@@ -257,6 +259,8 @@ def _record_runtime_stats(runtime_stats: dict, record: dict) -> None:
     runtime_stats["invalid_calls"] += record.get("invalid_calls") or 0
     runtime_stats["preflight_rewrites"] += record.get("preflight_rewrites") or 0
     runtime_stats["preflight_denies"] += record.get("preflight_denies") or 0
+    runtime_stats["tool_success_after_preflight"] += record.get("tool_success_after_preflight") or 0
+    runtime_stats["tool_failure_after_preflight"] += record.get("tool_failure_after_preflight") or 0
     for reason, count in (record.get("preflight_reasons") or {}).items():
         _inc_counter(runtime_stats["preflight_reasons"], reason, count)
     if record.get("context_compacted"):
@@ -355,6 +359,7 @@ def create_app(
     reviewer = ReviewManager(settings)
     critic = CriticManager(settings)
     research = ResearchManager(settings)
+    pending_preflight: dict[tuple[str, str], dict] = {}
 
     async def fast_complete(messages: list[dict]) -> str:
         candidates = pool.with_role("fast") or pool.backends
@@ -448,6 +453,28 @@ def create_app(
             conv = decode(body)
         except (KeyError, TypeError, AttributeError) as exc:
             return invalid_request(f"could not decode request: {exc!r}")
+        skey = session_key(body)
+        metrics: dict = {}
+        metrics.setdefault("tool_success_after_preflight", 0)
+        metrics.setdefault("tool_failure_after_preflight", 0)
+        metrics.setdefault("tool_results_after_preflight", [])
+        for turn in conv.turns:
+            for part in turn.parts:
+                if not isinstance(part, ToolResultPart):
+                    continue
+                pending = pending_preflight.pop((skey, part.tool_call_id), None)
+                if pending is None:
+                    continue
+                if part.is_error:
+                    metrics["tool_failure_after_preflight"] += 1
+                else:
+                    metrics["tool_success_after_preflight"] += 1
+                metrics["tool_results_after_preflight"].append({
+                    "id": part.tool_call_id,
+                    "tool": pending.get("tool"),
+                    "preflight_reason": pending.get("reason"),
+                    "success": not part.is_error,
+                })
 
         _dump(settings, "anthropic-request", body)
         role = request_role(body, settings)
@@ -459,9 +486,7 @@ def create_app(
         req_settings = settings.model_copy(deep=True)
         req_settings.profile.context_window = chosen.cfg.context_window
         _apply_relaxed(req_settings, chosen.cfg.relaxed)
-        metrics: dict = {}
         conv = run_pipeline(conv, req_settings, stages, metrics)
-        skey = session_key(body)
         rendered = chosen.profile.render(conv, chosen.model_name)
         apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
         _dump(settings, "rendered-payload", rendered)
@@ -599,6 +624,15 @@ def create_app(
             if record["ttft_ms"] is None:
                 record["ttft_ms"] = record["wall_ms"]
             record.update(metrics)
+            for event in record.get("preflight_events") or []:
+                if event.get("decision") != "rewrite" or not event.get("id"):
+                    continue
+                emitted = any(
+                    call.get("id") == event.get("id")
+                    for call in record.get("emitted_tool_calls") or []
+                )
+                if emitted:
+                    pending_preflight[(skey, event["id"])] = event
             _record_runtime_stats(stats["runtime"], record)
             if (
                 cache_key

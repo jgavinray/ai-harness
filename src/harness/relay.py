@@ -176,6 +176,7 @@ def _record_preflight(metrics: dict, call: ToolCall, decision) -> None:
         reasons = metrics.setdefault("preflight_reasons", {})
         reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
     event = {
+        "id": call.id,
         "tool": call.name,
         "decision": decision.decision,
         "reason": decision.reason,
@@ -361,6 +362,7 @@ async def run(
                     require_tool_after_invalid_skill = False
                     m["valid_calls"] += 1
                     m["emitted_tool_calls"].append({
+                        "id": fixed.id,
                         "tool": fixed.name,
                         "arguments": fixed.arguments,
                     })

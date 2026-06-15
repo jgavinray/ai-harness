@@ -45,6 +45,7 @@
     <dt>critic revise</dt><dd>Recent percentage of critic sidecar calls that injected corrective feedback into the next executor turn.</dd>
     <dt>invalid tools</dt><dd>Percentage of emitted tool calls that failed schema validation after retries.</dd>
     <dt>preflight</dt><dd>Deterministic tool-call checks before client execution. Rewrites are corrected locally; denies retry with local feedback.</dd>
+    <dt>preflight ok</dt><dd>Tool results that came back successful after a preflight rewrite, shown as success over total observed outcomes.</dd>
     <dt>ctx compact</dt><dd>Requests where the harness proactively compacted conversation history before backend dispatch.</dd>
     <dt>ctx tok</dt><dd>Latest request context tokens before and after pipeline compaction.</dd>
     <dt>state blocks</dt><dd>Free-text completions blocked because the current runtime action state required a tool call.</dd>
@@ -82,6 +83,7 @@ async function tick() {
         s.runtime ? `${fmt(s.runtime.invalid_calls)} invalid / ${fmt(s.runtime.valid_calls + s.runtime.invalid_calls)} total` : ""],
       ["preflight", s.runtime ? `${fmt(s.runtime.preflight_rewrites)} / ${fmt(s.runtime.preflight_denies)}` : "–",
         "rewrites / denies"],
+      ["preflight ok", s.runtime ? `${fmt(s.runtime.tool_success_after_preflight)} / ${fmt(s.runtime.tool_success_after_preflight + s.runtime.tool_failure_after_preflight)}` : "–"],
       ["ctx compact", s.runtime ? fmt(s.runtime.context_compactions) : "–",
         s.runtime ? `${fmt(s.runtime.turns_elided)} turns elided` : ""],
       ["ctx tok", s.runtime ? `${fmt(s.runtime.latest_context_tokens_before)} → ${fmt(s.runtime.latest_context_tokens_after)}` : "–",
