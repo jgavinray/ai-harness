@@ -1,4 +1,5 @@
 import json
+import re
 
 from harness.config import Settings
 from harness.log import RequestLogger
@@ -15,6 +16,19 @@ def test_logger_writes_jsonl(tmp_path):
     logger.write({"request_id": "r2", "wall_ms": 30})
     lines = (tmp_path / "requests.jsonl").read_text().strip().split("\n")
     assert [json.loads(l)["request_id"] for l in lines] == ["r1", "r2"]
+
+
+def test_logger_rotates_existing_oversized_file(tmp_path):
+    path = tmp_path / "requests.jsonl"
+    path.write_text("old request\n")
+    logger = RequestLogger(path, rotate_bytes=10)
+    logger.write({"request_id": "new"})
+
+    archives = list(tmp_path.glob("requests-*.jsonl"))
+    assert len(archives) == 1
+    assert re.fullmatch(r"requests-\d{8}-\d+\.jsonl", archives[0].name)
+    assert archives[0].read_text() == "old request\n"
+    assert json.loads(path.read_text())["request_id"] == "new"
 
 
 def test_logger_disabled_when_path_none():

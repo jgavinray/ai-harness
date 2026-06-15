@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from harness.ir import Done, IREvent, TextDelta, ThinkingDelta, ToolCall
+from harness.rotation import DEFAULT_ROTATE_BYTES, rotate_if_needed
 
 
 def serialize_event(ev: IREvent) -> dict:
@@ -50,12 +51,19 @@ def assistant_message(events: list[dict]) -> dict:
 
 
 class TraceStore:
-    def __init__(self, directory: str | Path | None, tag: str | None = None) -> None:
+    def __init__(
+        self,
+        directory: str | Path | None,
+        tag: str | None = None,
+        rotate_bytes: int = DEFAULT_ROTATE_BYTES,
+    ) -> None:
         self.path = Path(directory) / "sessions.jsonl" if directory else None
         self.tag = tag if tag is not None else os.environ.get("HARNESS_TRACE_TAG", "")
+        self.rotate_bytes = rotate_bytes
         self._lock = threading.Lock()
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            rotate_if_needed(self.path, self.rotate_bytes)
 
     def append(
         self,
@@ -79,5 +87,7 @@ class TraceStore:
             },
             separators=(",", ":"),
         )
-        with self._lock, self.path.open("a") as f:
-            f.write(line + "\n")
+        with self._lock:
+            rotate_if_needed(self.path, self.rotate_bytes)
+            with self.path.open("a") as f:
+                f.write(line + "\n")

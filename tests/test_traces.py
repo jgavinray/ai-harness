@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -35,6 +36,21 @@ def test_trace_store_tag_and_write(tmp_path, monkeypatch):
     rec = json.loads((tmp_path / "sessions.jsonl").read_text())
     assert rec["tag"] == "model-full-fix-test-0"
     assert rec["events"] == [{"t": "text", "text": "x"}]
+
+
+def test_trace_store_rotates_existing_oversized_file(tmp_path):
+    path = tmp_path / "sessions.jsonl"
+    path.write_text("old trace\n")
+    store = TraceStore(tmp_path, tag="rotate-test", rotate_bytes=5)
+    store.append("sess1", "req1", {"messages": []}, [Done("stop")], {})
+
+    archives = list(tmp_path.glob("sessions-*.jsonl"))
+    assert len(archives) == 1
+    assert re.fullmatch(r"sessions-\d{8}-\d+\.jsonl", archives[0].name)
+    assert archives[0].read_text() == "old trace\n"
+    rec = json.loads(path.read_text())
+    assert rec["tag"] == "rotate-test"
+    assert rec["events"][0]["t"] == "done"
 
 
 async def test_server_writes_traces(tmp_path):
