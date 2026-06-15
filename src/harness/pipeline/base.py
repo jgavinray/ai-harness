@@ -1,3 +1,4 @@
+from inspect import signature
 from typing import Protocol, Sequence
 
 from harness.config import Settings
@@ -9,8 +10,17 @@ class Stage(Protocol):
 
 
 def run_pipeline(
-    conv: Conversation, settings: Settings, stages: Sequence[Stage]
+    conv: Conversation,
+    settings: Settings,
+    stages: Sequence[Stage],
+    metrics: dict | None = None,
 ) -> Conversation:
     for stage in stages:
-        conv = stage.apply(conv, settings)
+        if metrics is None:
+            conv = stage.apply(conv, settings)
+            continue
+        if len(signature(stage.apply).parameters) >= 3:
+            conv = stage.apply(conv, settings, metrics)  # type: ignore[misc]
+        else:
+            conv = stage.apply(conv, settings)
     return conv

@@ -5,7 +5,7 @@ import httpx
 from harness.config import PoolBackendCfg, RiskProfileCfg, Settings
 from harness.server import create_app
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
-from tests.test_server import EDIT_TOOL, request_body
+from tests.test_server import EDIT_TOOL, READ_TOOL, request_body
 
 
 def critic_body():
@@ -149,3 +149,46 @@ async def test_critic_degrades_without_backend():
         resp = await client.post("/v1/messages", json=critic_body())
     assert resp.status_code == 200
     assert len(fake.requests) == 1
+
+
+async def test_critic_skips_deterministic_path_alias(tmp_path):
+    body = request_body(stream=False, tools=[READ_TOOL])
+    body["messages"] = [
+        {"role": "user", "content": "read the file"},
+        {
+            "role": "assistant",
+            "content": [{
+                "id": "r1",
+                "type": "tool_use",
+                "name": "Read",
+                "input": {"file_path": "/Users/jgavinray/dev-pr/src/main.c"},
+            }],
+        },
+        {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "r1",
+                "is_error": True,
+                "content": "No such file or directory: /Users/jgavinray/dev-pr/src/main.c",
+            }],
+        },
+    ]
+    fake = FakeOpenAI()
+    fake.push([text_chunk("continuing"), finish_chunk("stop")])
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings(tmp_path), backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+        stats = (await client.get("/stats")).json()
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    record = rows[0]
+    assert record["critic_eligible"] is False
+    assert record["critic_skipped_reason"] == "path_alias"
+    assert record["critic_saved_turn_estimate"] == 1
+    assert stats["critic"]["calls"] == 0
+    assert stats["runtime"]["critic_skips"]["path_alias"] == 1

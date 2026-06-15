@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import AsyncIterator, Awaitable, Callable
 
+from harness.action_state import current_action_state, shape_tools_for_state
 from harness.backends.base import Backend
 from harness.config import Settings
 from harness.ir import (
@@ -31,7 +32,7 @@ from harness.guards import (
     guard_tool_call,
     has_unverified_edit,
     increment_guard,
-    normalize_confused_paths,
+    preflight_tool_call,
 )
 from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
@@ -100,6 +101,14 @@ def _append_guard_feedback(conv: Conversation, guard: str, message: str) -> Conv
     return replace(conv, turns=turns)
 
 
+def _append_preflight_feedback(conv: Conversation, name: str, message: str) -> Conversation:
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[tool preflight denied: {name}]"),)),
+        Turn("user", (TextPart(message),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _append_skill_feedback(conv: Conversation, name: str, compiled: str) -> Conversation:
     turns = conv.turns + (
         Turn("assistant", (TextPart(f"[requested skill: {name}]"),)),
@@ -143,6 +152,27 @@ def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     return replace(conv, tools=conv.tools + (tool,))
 
 
+def _record_preflight(metrics: dict, call: ToolCall, decision) -> None:
+    metrics["preflight_decision"] = decision.decision
+    metrics["preflight_reason"] = decision.reason
+    if decision.decision == "rewrite":
+        metrics["preflight_rewrites"] += 1
+    elif decision.decision == "deny":
+        metrics["preflight_denies"] += 1
+    if decision.reason:
+        reasons = metrics.setdefault("preflight_reasons", {})
+        reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
+    event = {
+        "tool": call.name,
+        "decision": decision.decision,
+        "reason": decision.reason,
+        "original_arguments": decision.original_arguments,
+        "rewritten_arguments": decision.rewritten_arguments,
+        "bash_command_class": decision.bash_command_class,
+    }
+    metrics.setdefault("preflight_events", []).append(event)
+
+
 async def run(
     conv: Conversation,
     profile: Profile,
@@ -166,10 +196,19 @@ async def run(
     m.setdefault("plan_drift", 0)
     m.setdefault("path_rewrites", 0)
     m.setdefault("path_rewrite_names", [])
+    m.setdefault("preflight_decision", "none")
+    m.setdefault("preflight_reason", None)
+    m.setdefault("preflight_rewrites", 0)
+    m.setdefault("preflight_denies", 0)
+    m.setdefault("preflight_reasons", {})
+    m.setdefault("preflight_events", [])
+    m.setdefault("emitted_tool_calls", [])
+    m.setdefault("first_attempt_constraints", 0)
     guard_metrics(m)
     attempts = 0
     suppress_text = False
     constraint_schema: dict | None = None
+    constraint_tool_name: str | None = None
     skill_compiler = SkillCompiler(settings, profile.name)
     require_tool_after_invalid_skill = False
 
@@ -184,8 +223,28 @@ async def run(
         return f"{message}\n\nReviewer feedback:\n{feedback}"
 
     while True:
-        payload = profile.render(conv, model_name)
-        apply_reasoning_budget(payload, settings, backend, role, body or {}, conv, m)
+        action_state = current_action_state(conv, settings)
+        m["action_state"] = action_state.name
+        m["action_state_reason"] = action_state.reason
+        payload_conv = shape_tools_for_state(conv, action_state)
+        if constraint_tool_name and all(t.name != constraint_tool_name for t in payload_conv.tools):
+            tool = next((t for t in conv.tools if t.name == constraint_tool_name), None)
+            if tool is not None:
+                payload_conv = replace(payload_conv, tools=payload_conv.tools + (tool,))
+        m["allowed_tools"] = [tool.name for tool in payload_conv.tools]
+        payload = profile.render(payload_conv, model_name)
+        apply_reasoning_budget(payload, settings, backend, role, body or {}, payload_conv, m)
+        required_tool = action_state.required_tool
+        if action_state.requires_tool and required_tool is None and len(payload_conv.tools) == 1:
+            required_tool = payload_conv.tools[0].name
+        if not attempts and backend.constrained and required_tool:
+            required = next(
+                (t for t in conv.tools if t.name == required_tool),
+                None,
+            )
+            if required is not None:
+                payload = backend.apply_constraint(payload, required.input_schema)
+                m["first_attempt_constraints"] += 1
         if attempts and backend.constrained and constraint_schema is not None:
             payload = backend.apply_constraint(payload, constraint_schema)
 
@@ -196,6 +255,7 @@ async def run(
         loop_seen = 0
         emitted_valid_call = False
         guarded_call: tuple[str, str] | None = None
+        preflight_feedback: tuple[str, str] | None = None
         guarded_done: tuple[str, str] | None = None
         skill_feedback: tuple[str, str] | None = None
         invalid_skill: str | None = None
@@ -243,10 +303,25 @@ async def run(
                     invalid_skill = ev.raw_arguments or str(ev.arguments)
                     break
                 if fixed is not None:
-                    fixed, path_rewritten = normalize_confused_paths(fixed)
-                    if path_rewritten:
-                        m["path_rewrites"] += 1
-                        m["path_rewrite_names"].append(fixed.name)
+                    preflight = preflight_tool_call(conv, fixed, settings)
+                    _record_preflight(m, fixed, preflight)
+                    if preflight.decision == "rewrite":
+                        fixed = preflight.call
+                        if preflight.reason == "path_alias":
+                            m["path_rewrites"] += 1
+                            m["path_rewrite_names"].append(fixed.name)
+                    elif preflight.decision == "deny":
+                        if attempts < settings.pipeline.repair_retries:
+                            preflight_feedback = (
+                                preflight.reason or "denied",
+                                preflight.feedback or "The tool call was denied by deterministic preflight.",
+                            )
+                            break
+                        m["invalid_calls"] += 1
+                        yield TextDelta(
+                            f"\n[preflight denied {fixed.name}: {preflight.reason or 'denied'}]\n"
+                        )
+                        continue
                     if fixed.name == "Skill" and settings.skills.enabled:
                         name = skill_name(fixed.arguments)
                         compiled = skill_compiler.compile(name) if name else None
@@ -264,6 +339,10 @@ async def run(
                     emitted_valid_call = True
                     require_tool_after_invalid_skill = False
                     m["valid_calls"] += 1
+                    m["emitted_tool_calls"].append({
+                        "tool": fixed.name,
+                        "arguments": fixed.arguments,
+                    })
                     if ev.raw_arguments:  # arrived malformed, json-repaired locally
                         m["repaired_calls"] += 1
                     yield fixed
@@ -308,6 +387,13 @@ async def run(
                 "have, take a different action, or state your conclusion."
             )
             conv = _append_guard_feedback(conv, "same_approach", await reviewed("loop_break", feedback))
+            continue
+
+        if preflight_feedback is not None:
+            attempts += 1
+            guard, message = preflight_feedback
+            suppress_text = True
+            conv = _append_preflight_feedback(conv, guard, message)
             continue
 
         if guarded_call is not None:
@@ -361,6 +447,7 @@ async def run(
         suppress_text = True
         tool = next((t for t in conv.tools if t.name == bad_call.name), None)
         constraint_schema = tool.input_schema if tool else None
+        constraint_tool_name = bad_call.name
         if reviewer is not None:
             attempt = bad_call.raw_arguments or str(bad_call.arguments)
             feedback = (

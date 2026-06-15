@@ -49,14 +49,20 @@ def _digest(evicted: list[tuple[Turn, ...]]) -> Turn:
     return Turn("user", (TextPart(text),))
 
 
-def _truncate_results(turn: Turn) -> Turn:
+def _truncate_results(turn: Turn) -> tuple[Turn, int]:
+    truncated = 0
     parts = tuple(
-        replace(p, content=p.content[:HEAD] + ELISION + p.content[-TAIL:])
-        if isinstance(p, ToolResultPart) and len(p.content) > TRUNCATE_OVER
-        else p
+        (
+            replace(p, content=p.content[:HEAD] + ELISION + p.content[-TAIL:])
+            if isinstance(p, ToolResultPart) and len(p.content) > TRUNCATE_OVER
+            else p
+        )
         for p in turn.parts
     )
-    return Turn(turn.role, parts)
+    for old, new in zip(turn.parts, parts):
+        if old is not new and isinstance(old, ToolResultPart):
+            truncated += 1
+    return Turn(turn.role, parts), truncated
 
 
 def _groups(turns: tuple[Turn, ...]) -> list[tuple[Turn, ...]]:
@@ -83,23 +89,59 @@ class HistoryStage:
     def __init__(self) -> None:
         self.counter = HeuristicCounter()
 
-    def apply(self, conv: Conversation, settings: Settings) -> Conversation:
+    def apply(
+        self, conv: Conversation, settings: Settings, metrics: dict | None = None
+    ) -> Conversation:
         cw = settings.profile.context_window
         # Clients may request max_tokens larger than a small window; reserve
         # at most half the window for output so the budget never goes negative
         # (a negative budget evicts the whole conversation, task included).
-        budget = cw - min(conv.params.max_tokens, cw // 2) - MARGIN
-        if count_conversation(conv, self.counter) <= budget:
+        hard_budget = cw - min(conv.params.max_tokens, cw // 2) - MARGIN
+        effective_window = settings.pipeline.effective_context_window or cw
+        threshold = min(
+            hard_budget,
+            int(effective_window * settings.pipeline.compact_at_ratio),
+        )
+        target = min(
+            int(hard_budget * settings.pipeline.compact_target_ratio),
+            int(effective_window * settings.pipeline.compact_target_ratio),
+        )
+        before = count_conversation(conv, self.counter)
+        if metrics is not None:
+            metrics.update({
+                "context_tokens_before": before,
+                "context_tokens_after": before,
+                "context_budget": threshold,
+                "context_effective_window": effective_window,
+                "context_compacted": False,
+                "compaction_reason": None,
+                "turns_elided": 0,
+                "tool_results_truncated": 0,
+            })
+        if before <= threshold:
             return conv
-        target = budget * TARGET_RATIO
 
         k = settings.pipeline.recent_turns_protected
-        head, tail = conv.turns[:-k], conv.turns[-k:]
+        head, tail = (conv.turns[:-k], conv.turns[-k:]) if k else (conv.turns, ())
 
         # pass 1: truncate old tool results
-        head = tuple(_truncate_results(t) for t in head)
+        truncated = 0
+        truncated_head = []
+        for turn in head:
+            new_turn, n = _truncate_results(turn)
+            truncated += n
+            truncated_head.append(new_turn)
+        head = tuple(truncated_head)
         conv = replace(conv, turns=head + tail)
-        if count_conversation(conv, self.counter) <= target:
+        after_truncate = count_conversation(conv, self.counter)
+        if after_truncate <= target:
+            if metrics is not None:
+                metrics.update({
+                    "context_tokens_after": after_truncate,
+                    "context_compacted": after_truncate < before,
+                    "compaction_reason": "tool_result_truncation",
+                    "tool_results_truncated": truncated,
+                })
             return conv
 
         # pass 2: evict turn-groups from the front, but never the anchor —
@@ -116,4 +158,13 @@ class HistoryStage:
             kept = tuple(t for g in groups for t in g)
             marker = (_digest(dropped),) if dropped else ()
             conv = replace(conv, turns=anchor + marker + kept + tail)
+        after = count_conversation(conv, self.counter)
+        if metrics is not None:
+            metrics.update({
+                "context_tokens_after": after,
+                "context_compacted": after < before,
+                "compaction_reason": "turn_eviction" if dropped else "tool_result_truncation",
+                "turns_elided": sum(len(g) for g in dropped),
+                "tool_results_truncated": truncated,
+            })
         return conv

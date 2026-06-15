@@ -44,10 +44,15 @@ class PipelineCfg(BaseModel):
     fewshot: bool = True
     repair_retries: int = 2
     recent_turns_protected: int = 4
+    effective_context_window: int | None = None
+    compact_at_ratio: float = 0.80
+    compact_target_ratio: float = 0.50
+    action_state_tools: bool = True
     reasoning: str = "thinking"  # thinking | strip
     workflow_guards: bool = True
     guard_edit_without_read: bool = True
     guard_verify_after_edit: bool = True
+    allowed_roots: list[str] = []
 
 
 class DebugCfg(BaseModel):

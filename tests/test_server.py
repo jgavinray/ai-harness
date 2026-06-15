@@ -192,6 +192,7 @@ async def test_stats():
         await client.post("/v1/messages", json=request_body(stream=False))
         resp = await client.get("/stats")
     assert resp.json()["requests"] == 1
+    assert resp.json()["runtime"]["invalid_tool_rate_pct"] == 0.0
 
 
 async def test_pipeline_applied_end_to_end():

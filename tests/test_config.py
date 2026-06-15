@@ -7,6 +7,9 @@ def test_defaults():
     assert s.pipeline.system_prompt == "replace"
     assert s.pipeline.max_tools == 8
     assert s.pipeline.repair_retries == 2
+    assert s.pipeline.compact_at_ratio == 0.80
+    assert s.pipeline.compact_target_ratio == 0.50
+    assert s.pipeline.action_state_tools is True
     assert s.profile.context_window == 32768
 
 

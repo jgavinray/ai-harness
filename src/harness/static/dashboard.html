@@ -43,6 +43,10 @@
   <dl>
     <dt>resp cache hit</dt><dd>Exact response-cache hit rate since this harness process started; shown as hits over total lookups.</dd>
     <dt>critic revise</dt><dd>Recent percentage of critic sidecar calls that injected corrective feedback into the next executor turn.</dd>
+    <dt>invalid tools</dt><dd>Percentage of emitted tool calls that failed schema validation after retries.</dd>
+    <dt>preflight</dt><dd>Deterministic tool-call checks before client execution. Rewrites are corrected locally; denies retry with local feedback.</dd>
+    <dt>ctx compact</dt><dd>Requests where the harness proactively compacted conversation history before backend dispatch.</dd>
+    <dt>critic skip</dt><dd>Requests where qwen80 critic was not called because deterministic runtime handling was enough or no critic trigger existed.</dd>
     <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
     <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
@@ -72,6 +76,14 @@ async function tick() {
         `${fmt(s.response_cache.hits)} / ${fmt(cacheTotal)}`],
       ["critic revise", s.critic ? s.critic.recent_revise_pct + "%" : "–",
         s.critic ? `${fmt(s.critic.recent_revise)} / ${fmt(s.critic.recent_calls)} recent` : ""],
+      ["invalid tools", s.runtime ? s.runtime.invalid_tool_rate_pct + "%" : "–",
+        s.runtime ? `${fmt(s.runtime.invalid_calls)} invalid / ${fmt(s.runtime.valid_calls + s.runtime.invalid_calls)} total` : ""],
+      ["preflight", s.runtime ? `${fmt(s.runtime.preflight_rewrites)} / ${fmt(s.runtime.preflight_denies)}` : "–",
+        "rewrites / denies"],
+      ["ctx compact", s.runtime ? fmt(s.runtime.context_compactions) : "–",
+        s.runtime ? `${fmt(s.runtime.turns_elided)} turns elided` : ""],
+      ["critic skip", s.runtime ? fmt(Object.values(s.runtime.critic_skips || {}).reduce((a, b) => a + b, 0)) : "–",
+        s.runtime ? `${fmt(s.runtime.critic_saved_turn_estimate)} saved est.` : ""],
     ];
     document.getElementById("cards").innerHTML = cards
       .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)

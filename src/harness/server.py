@@ -175,6 +175,21 @@ def _empty_critic_stats() -> dict:
     }
 
 
+def _empty_runtime_stats() -> dict:
+    return {
+        "valid_calls": 0,
+        "invalid_calls": 0,
+        "preflight_rewrites": 0,
+        "preflight_denies": 0,
+        "preflight_reasons": {},
+        "context_compactions": 0,
+        "turns_elided": 0,
+        "tool_results_truncated": 0,
+        "critic_skips": {},
+        "critic_saved_turn_estimate": 0,
+    }
+
+
 def _inc_counter(target: dict, key: str | None, amount: int = 1) -> None:
     if not key:
         return
@@ -231,6 +246,30 @@ def _critic_summary(critic_stats: dict) -> dict:
     }
 
 
+def _record_runtime_stats(runtime_stats: dict, record: dict) -> None:
+    runtime_stats["valid_calls"] += record.get("valid_calls") or 0
+    runtime_stats["invalid_calls"] += record.get("invalid_calls") or 0
+    runtime_stats["preflight_rewrites"] += record.get("preflight_rewrites") or 0
+    runtime_stats["preflight_denies"] += record.get("preflight_denies") or 0
+    for reason, count in (record.get("preflight_reasons") or {}).items():
+        _inc_counter(runtime_stats["preflight_reasons"], reason, count)
+    if record.get("context_compacted"):
+        runtime_stats["context_compactions"] += 1
+    runtime_stats["turns_elided"] += record.get("turns_elided") or 0
+    runtime_stats["tool_results_truncated"] += record.get("tool_results_truncated") or 0
+    _inc_counter(runtime_stats["critic_skips"], record.get("critic_skipped_reason"))
+    runtime_stats["critic_saved_turn_estimate"] += record.get("critic_saved_turn_estimate") or 0
+
+
+def _runtime_summary(runtime_stats: dict) -> dict:
+    total_tool_calls = runtime_stats["valid_calls"] + runtime_stats["invalid_calls"]
+    invalid_rate = round(100 * runtime_stats["invalid_calls"] / (total_tool_calls or 1), 1)
+    return {
+        **runtime_stats,
+        "invalid_tool_rate_pct": invalid_rate,
+    }
+
+
 def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
     """Replay the request log so a restart doesn't zero /stats aggregates.
 
@@ -248,6 +287,8 @@ def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
                 continue
             if "critic" in stats:
                 _record_critic_stats(stats["critic"], r)
+            if "runtime" in stats:
+                _record_runtime_stats(stats["runtime"], r)
             stats["requests"] += 1
             if r.get("error"):
                 stats["errors"] += 1
@@ -313,7 +354,8 @@ def create_app(
     memory = MemoryManager(settings, fast_complete if settings.memory.enabled else None)
     stages = STAGES + [MemoryStage(memory, settings)]
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
-             "cached_tokens": 0, "critic": _empty_critic_stats()}
+             "cached_tokens": 0, "critic": _empty_critic_stats(),
+             "runtime": _empty_runtime_stats()}
     if settings.log.requests_path:
         _seed_stats(stats, pool, settings.log.requests_path)
 
@@ -398,10 +440,11 @@ def create_app(
         req_settings = settings.model_copy(deep=True)
         req_settings.profile.context_window = chosen.cfg.context_window
         _apply_relaxed(req_settings, chosen.cfg.relaxed)
-        conv = run_pipeline(conv, req_settings, stages)
+        metrics: dict = {}
+        conv = run_pipeline(conv, req_settings, stages, metrics)
         skey = session_key(body)
         rendered = chosen.profile.render(conv, chosen.model_name)
-        apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics := {})
+        apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
         _dump(settings, "rendered-payload", rendered)
 
         stats["requests"] += 1
@@ -537,6 +580,7 @@ def create_app(
             if record["ttft_ms"] is None:
                 record["ttft_ms"] = record["wall_ms"]
             record.update(metrics)
+            _record_runtime_stats(stats["runtime"], record)
             if (
                 cache_key
                 and cached_events is None
@@ -636,6 +680,7 @@ def create_app(
             **stats,
             "backends": backends,
             "critic": _critic_summary(stats["critic"]),
+            "runtime": _runtime_summary(stats["runtime"]),
             "response_cache": {"hits": rcache.hits, "misses": rcache.misses},
         })
 

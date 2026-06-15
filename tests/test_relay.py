@@ -37,6 +37,14 @@ BASH_SCHEMA = {
     "properties": {"command": {"type": "string"}},
     "required": ["command"],
 }
+GREP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pattern": {"type": "string"},
+        "path": {"type": "string"},
+    },
+    "required": ["pattern"],
+}
 SKILL_SCHEMA = {
     "type": "object",
     "properties": {"name": {"type": "string"}},
@@ -86,6 +94,11 @@ async def test_dev_pr_path_confusion_is_rewritten_before_tool_call():
     assert call.arguments["file_path"] == "/Users/jgavinray/dev/pr/src/main.c"
     assert metrics["path_rewrites"] == 1
     assert metrics["path_rewrite_names"] == ["Read"]
+    assert metrics["preflight_rewrites"] == 1
+    assert metrics["preflight_reason"] == "path_alias"
+    assert metrics["preflight_events"][0]["original_arguments"]["file_path"].startswith(
+        "/Users/jgavinray/dev-pr"
+    )
 
 
 async def test_bad_then_good_retries_with_feedback():
@@ -130,7 +143,7 @@ async def test_constrained_backend_gets_schema_on_retry():
     fake.push([tool_chunk("c2", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
     fake.push([finish_chunk("stop")])
     await collect_events(fake, kind="vllm")
-    assert "guided_json" not in fake.requests[0]
+    assert fake.requests[0]["guided_json"] == READ_SCHEMA
     assert fake.requests[1]["guided_json"] == READ_SCHEMA
 
 
@@ -276,6 +289,129 @@ def conv_with_edit_tools(turns=()) -> Conversation:
         ),
         GenParams(max_tokens=512, stream=True),
     )
+
+
+def conv_with_search_tools() -> Conversation:
+    return Conversation(
+        "sys",
+        (Turn("user", (TextPart("search source"),)),),
+        (
+            ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA),
+            ToolDef("Grep", "searches", GREP_SCHEMA, GREP_SCHEMA),
+        ),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_preflight_rewrites_grep_alternation():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "grep -rn \\"foo|bar\\" src"}'),
+        finish_chunk("tool_calls"),
+    ])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv_with_search_tools(), get_profile("qwen"), backend, Settings(), metrics)]
+    call = next(e for e in evs if isinstance(e, ToolCall))
+    assert call.arguments["command"] == 'grep -E -rn "foo|bar" src'
+    assert metrics["preflight_rewrites"] == 1
+    assert metrics["preflight_reason"] == "grep_extended_regexp"
+    assert metrics["preflight_events"][0]["bash_command_class"] == "inspect"
+    assert metrics["emitted_tool_calls"][0]["arguments"]["command"] == 'grep -E -rn "foo|bar" src'
+
+
+async def test_preflight_denies_bash_cat_when_read_exists():
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("inspect /x"),)),),
+        (read, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "cat /x"}'), finish_chunk("tool_calls")])
+    fake.push([tool_chunk("r1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["use_read_tool"] == 1
+    assert "Use the Read tool" in str(fake.requests[1])
+
+
+async def test_preflight_denies_write_missing_parent(tmp_path):
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("create file"),)),),
+        (write,),
+        GenParams(max_tokens=512, stream=True),
+    )
+    missing = tmp_path / "missing" / "x.txt"
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("w1", "Write", f'{{"file_path": "{missing}", "content": "x"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([text_chunk("I need to create the directory first."), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert not any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["missing_parent"] == 1
+    assert "parent directory" in str(fake.requests[1])
+
+
+async def test_preflight_denies_dangerous_bash():
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("clean temp"),)),),
+        (bash,),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("b1", "Bash", '{"command": "rm -rf /tmp/something"}'), finish_chunk("tool_calls")])
+    fake.push([text_chunk("I will use a safer command."), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert not any(isinstance(e, ToolCall) for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["dangerous_command"] == 1
+    assert metrics["preflight_events"][0]["bash_command_class"] == "dangerous"
+
+
+async def test_preflight_denies_repeated_failing_call():
+    turns = (
+        Turn("user", (TextPart("read missing"),)),
+        Turn("assistant", (ToolCallPart("r1", "Read", {"file_path": "/missing"}),)),
+        Turn("user", (ToolResultPart("r1", "No such file", is_error=True),)),
+    )
+    read = ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA)
+    conv = Conversation("sys", turns, (read,), GenParams(max_tokens=512, stream=True))
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("r2", "Read", '{"file_path": "/missing"}'), finish_chunk("tool_calls")])
+    fake.push([text_chunk("I'll use the existing error."), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    assert not any(isinstance(e, ToolCall) for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["repeated_failing_call"] == 1
 
 
 async def test_edit_without_read_guard_retries_with_feedback():

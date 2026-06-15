@@ -28,8 +28,11 @@ def small_settings(window: int) -> Settings:
 
 def test_under_budget_identity():
     conv = big_session(2, 100)
-    out = HistoryStage().apply(conv, small_settings(32768))
+    metrics = {}
+    out = HistoryStage().apply(conv, small_settings(32768), metrics)
     assert out is conv
+    assert metrics["context_compacted"] is False
+    assert metrics["context_tokens_before"] == metrics["context_tokens_after"]
 
 
 def test_oversized_max_tokens_does_not_evict_everything():
@@ -47,7 +50,8 @@ def test_oversized_max_tokens_does_not_evict_everything():
 def test_old_results_truncated_recent_protected():
     conv = big_session()
     s = small_settings(16000)
-    out = HistoryStage().apply(conv, s)
+    metrics = {}
+    out = HistoryStage().apply(conv, s, metrics)
     k = s.pipeline.recent_turns_protected
     assert out.turns[-k:] == conv.turns[-k:]  # protected tail byte-identical
     old_results = [
@@ -55,6 +59,24 @@ def test_old_results_truncated_recent_protected():
     ]
     assert any(ELISION in p.content for p in old_results)
     assert out.system == conv.system
+    assert metrics["context_compacted"] is True
+    assert metrics["tool_results_truncated"] > 0
+    assert metrics["context_tokens_after"] < metrics["context_tokens_before"]
+
+
+def test_proactive_compaction_triggers_before_hard_budget():
+    conv = big_session(12, 6000)
+    s = small_settings(32000)
+    s.pipeline.effective_context_window = 20000
+    s.pipeline.compact_at_ratio = 0.80
+    metrics = {}
+    out = HistoryStage().apply(conv, s, metrics)
+    hard_budget = s.profile.context_window - conv.params.max_tokens - 1024
+    assert metrics["context_tokens_before"] <= hard_budget
+    assert metrics["context_budget"] == 16000
+    assert metrics["context_compacted"] is True
+    assert metrics["context_tokens_after"] <= 10000
+    assert len(out.turns) <= len(conv.turns)
 
 
 def test_eviction_keeps_pairing():

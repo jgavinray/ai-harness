@@ -19,6 +19,7 @@ from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, T
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
+from harness.guards import BAD_DEV_PR_PREFIX, GOOD_DEV_PR_PREFIX
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 BUILD_WORDS = ("gcc", "clang", "make", "cmake", "ninja", "ld ", "undefined reference")
@@ -50,13 +51,24 @@ class CriticManager:
         metrics["critic_triggers"] = evidence["triggers"]
         metrics["critic_matched_profiles"] = evidence["matched_profiles"]
         if not evidence["triggers"]:
+            metrics["critic_eligible"] = False
+            metrics["critic_skipped_reason"] = "no_triggers"
             return conv
+        deterministic_skip = _deterministic_skip_reason(evidence)
+        if deterministic_skip:
+            metrics["critic_eligible"] = False
+            metrics["critic_skipped_reason"] = deterministic_skip
+            metrics["critic_saved_turn_estimate"] = 1
+            return conv
+        metrics["critic_eligible"] = True
         fingerprint = _fingerprint(evidence)
         if self.reviewed.get(key) == fingerprint:
+            metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = "already_reviewed"
             return conv
         backend = _critic_backend(pool)
         if backend is None:
+            metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = "no_backend"
             return conv
         self.reviewed[key] = fingerprint
@@ -196,6 +208,25 @@ def _pathish(text: str) -> list[str]:
 
 def _fingerprint(evidence: dict) -> str:
     return hashlib.sha1(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+
+
+def _deterministic_skip_reason(evidence: dict) -> str | None:
+    triggers = set(evidence.get("triggers") or [])
+    if triggers - {"tool_error", "risky_path"}:
+        return None
+    text = "\n".join(
+        (evidence.get("paths") or [])
+        + (evidence.get("recent_results") or [])
+    ).lower()
+    if BAD_DEV_PR_PREFIX.lower() in text or (
+        "dev-pr" in text and GOOD_DEV_PR_PREFIX.lower() not in text
+    ):
+        return "path_alias"
+    if "grep" in text and "regular expression" in text and "invalid" in text:
+        return "grep_syntax"
+    if "no such file or directory" in text and ("mkdir" in text or "parent" in text):
+        return "missing_parent"
+    return None
 
 
 def _critic_system() -> str:

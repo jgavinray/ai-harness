@@ -39,6 +39,9 @@ async def test_request_logged_with_metrics(tmp_path):
     assert rec["valid_calls"] == 1 and rec["retries"] == 0
     assert rec["wall_ms"] >= 0 and rec["ttft_ms"] >= 0
     assert rec["request_id"].startswith("msg_")
+    assert rec["context_tokens_before"] >= rec["context_tokens_after"]
+    assert rec["action_state"] == "inspect"
+    assert rec["allowed_tools"] == ["Read"]
 
 
 async def test_no_log_when_disabled(tmp_path):
