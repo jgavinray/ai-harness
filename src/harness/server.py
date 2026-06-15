@@ -623,7 +623,7 @@ def create_app(
                 try:
                     brief = await research.ensure(conv, pool, metrics)
                     fact = memory_fact(conv, brief or "")
-                    if fact and settings.memory.enabled:
+                    if fact and req_settings.memory.enabled:
                         memory.merge(project_key(conv.system), fact)
                     conv = research.inject(conv, brief)
                     rendered = chosen.profile.render(conv, chosen.model_name)
@@ -751,7 +751,7 @@ def create_app(
                 rcache.put(cache_key, buffer)
             if settings.traces.enabled and cached_events is None:
                 traces.append(skey, msg_id, rendered, buffer, dict(metrics))
-            if settings.memory.enabled and role == "main":
+            if req_settings.memory.enabled and role == "main":
                 memory.note(skey, conv.system, rendered.get("messages", []))
                 try:
                     asyncio.get_running_loop().create_task(memory.sweep())

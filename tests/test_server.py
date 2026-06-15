@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -190,6 +191,27 @@ async def test_agentic_os_mode_preserves_policy_prompt_and_tool_menu():
     assert "expert software engineering agent" not in rendered
     assert len(fake.requests[0]["tools"]) == 4
     assert stats["runtime"]["latest_pipeline_tool_count"] == 4
+
+
+async def test_agentic_os_mode_disables_post_response_memory_capture():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("done"), finish_chunk("stop")])
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.pipeline.policy_owner = "agentic_os"
+    settings.memory.enabled = True
+    settings.memory.idle_s = 0
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    body = request_body(stream=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+        await asyncio.sleep(0.05)
+
+    assert resp.status_code == 200
+    assert len(fake.requests) == 1
 
 
 async def test_count_tokens_no_backend_call():
