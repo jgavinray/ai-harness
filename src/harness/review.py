@@ -6,7 +6,7 @@ import time
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart
+from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
@@ -28,6 +28,7 @@ class ReviewManager:
         logger: RequestLogger | None = None,
         parent_request_id: str | None = None,
         session_key: str | None = None,
+        account_usage=None,
     ) -> str | None:
         if not self.cfg.enabled or trigger not in self.cfg.triggers:
             return None
@@ -52,6 +53,7 @@ class ReviewManager:
         apply_reasoning_budget(payload, self.settings, backend, "review", {}, conv, side_metrics)
         text = ""
         thinking = ""
+        done = Done("end_turn")
         start = time.monotonic()
         try:
             async for ev in backend.profile.parse(backend.stream(payload)):
@@ -59,6 +61,8 @@ class ReviewManager:
                     text += ev.text
                 elif isinstance(ev, ThinkingDelta):
                     thinking += ev.text
+                elif isinstance(ev, Done):
+                    done = ev
         except Exception as exc:
             metrics["review_error"] = str(exc)
             return None
@@ -67,6 +71,8 @@ class ReviewManager:
         metrics["review_action"] = "revise" if feedback else "approve"
         metrics["review_reasoning_budget_sent"] = side_metrics.get("reasoning_budget_sent")
         metrics["review_reasoning_tokens_observed"] = HeuristicCounter().count_text(thinking) if thinking else 0
+        if account_usage:
+            account_usage(backend, done, session_key, count_request=True)
         if logger:
             logger.write({
                 "kind": "sidecar",
@@ -79,6 +85,10 @@ class ReviewManager:
                 "review_trigger": trigger,
                 "review_action": metrics["review_action"],
                 "wall_ms": int((time.monotonic() - start) * 1000),
+                "input_tokens": done.input_tokens,
+                "output_tokens": done.output_tokens,
+                "cached_tokens": done.cached_tokens,
+                "stop_reason": done.stop_reason,
                 "reasoning_tokens_observed": metrics["review_reasoning_tokens_observed"],
                 **side_metrics,
             })

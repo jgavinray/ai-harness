@@ -236,6 +236,23 @@ def create_app(
     if settings.log.requests_path:
         _seed_stats(stats, pool, settings.log.requests_path)
 
+    def account_usage(b, done: Done, skey: str | None = None, *, count_request: bool = False) -> None:
+        if count_request:
+            stats["requests"] += 1
+        stats["input_tokens"] += done.input_tokens
+        stats["output_tokens"] += done.output_tokens
+        stats["cached_tokens"] += done.cached_tokens
+        b.prompt_tokens += done.input_tokens
+        b.cached_tokens += done.cached_tokens
+        b.output_tokens += done.output_tokens
+        b.recent_cache.append((done.input_tokens, done.cached_tokens))
+        del b.recent_cache[:-CACHE_WINDOW]
+        if skey and done.input_tokens:
+            b.kv_resident.pop(skey, None)
+            b.kv_resident[skey] = done.input_tokens + done.output_tokens
+            while len(b.kv_resident) > KV_RESIDENT_SESSIONS:
+                b.kv_resident.pop(next(iter(b.kv_resident)))
+
     def invalid_request(message: str) -> JSONResponse:
         return JSONResponse(error_body("invalid_request_error", message), status_code=400)
 
@@ -342,6 +359,7 @@ def create_app(
                         metrics,
                         logger=logger,
                         parent_request_id=msg_id,
+                        account_usage=account_usage,
                     )
                     conv = planner.inject(skey, conv)
                     rendered = chosen.profile.render(conv, chosen.model_name)
@@ -358,6 +376,7 @@ def create_app(
                     metrics,
                     logger=logger,
                     parent_request_id=msg_id,
+                    account_usage=account_usage,
                 )
                 rendered = chosen.profile.render(conv, chosen.model_name)
                 apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
@@ -384,6 +403,7 @@ def create_app(
                         logger=logger,
                         parent_request_id=msg_id,
                         session_key=skey,
+                        account_usage=account_usage,
                     )
             events = relay.run(
                 conv,
@@ -410,19 +430,7 @@ def create_app(
                     record["output_tokens"] = ev.output_tokens
                     record["cached_tokens"] = ev.cached_tokens
                     record["stop_reason"] = ev.stop_reason
-                    stats["input_tokens"] += ev.input_tokens
-                    stats["output_tokens"] += ev.output_tokens
-                    stats["cached_tokens"] += ev.cached_tokens
-                    chosen.prompt_tokens += ev.input_tokens
-                    chosen.cached_tokens += ev.cached_tokens
-                    chosen.output_tokens += ev.output_tokens
-                    chosen.recent_cache.append((ev.input_tokens, ev.cached_tokens))
-                    del chosen.recent_cache[:-CACHE_WINDOW]
-                    if ev.input_tokens:
-                        chosen.kv_resident.pop(skey, None)
-                        chosen.kv_resident[skey] = ev.input_tokens + ev.output_tokens
-                        while len(chosen.kv_resident) > KV_RESIDENT_SESSIONS:
-                            chosen.kv_resident.pop(next(iter(chosen.kv_resident)))
+                    account_usage(chosen, ev, skey)
                 elif isinstance(ev, ThinkingDelta):
                     metrics["reasoning_tokens_observed"] = (
                         metrics.get("reasoning_tokens_observed", 0)

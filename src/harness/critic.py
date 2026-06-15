@@ -15,7 +15,7 @@ from fnmatch import fnmatch
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart, Turn
+from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart, Turn
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
@@ -40,6 +40,7 @@ class CriticManager:
         *,
         logger: RequestLogger | None = None,
         parent_request_id: str | None = None,
+        account_usage=None,
     ) -> Conversation:
         if not self.cfg.enabled:
             return conv
@@ -72,6 +73,7 @@ class CriticManager:
         apply_reasoning_budget(payload, self.settings, backend, "critic", {}, conv, side_metrics)
         text = ""
         thinking = ""
+        done = Done("end_turn")
         start = time.monotonic()
         try:
             async for ev in backend.profile.parse(backend.stream(payload)):
@@ -79,6 +81,8 @@ class CriticManager:
                     text += ev.text
                 elif isinstance(ev, ThinkingDelta):
                     thinking += ev.text
+                elif isinstance(ev, Done):
+                    done = ev
         except Exception as exc:
             metrics["critic_error"] = str(exc)
             return conv
@@ -90,6 +94,8 @@ class CriticManager:
             "critic_reasoning_budget_sent": side_metrics.get("reasoning_budget_sent"),
             "critic_reasoning_tokens_observed": observed,
         })
+        if account_usage:
+            account_usage(backend, done, key, count_request=True)
         if logger:
             logger.write({
                 "kind": "sidecar",
@@ -103,6 +109,10 @@ class CriticManager:
                 "critic_triggers": evidence["triggers"],
                 "critic_matched_profiles": evidence["matched_profiles"],
                 "wall_ms": int((time.monotonic() - start) * 1000),
+                "input_tokens": done.input_tokens,
+                "output_tokens": done.output_tokens,
+                "cached_tokens": done.cached_tokens,
+                "stop_reason": done.stop_reason,
                 "reasoning_tokens_observed": observed,
                 **side_metrics,
             })

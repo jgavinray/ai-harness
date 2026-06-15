@@ -78,6 +78,7 @@ async def test_critic_injects_feedback_before_executor(tmp_path):
     app = create_app(settings(tmp_path), backend_client=backend_client)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
         resp = await client.post("/v1/messages", json=critic_body())
+        stats = (await client.get("/stats")).json()
     assert resp.status_code == 200
     assert fake.requests[0]["model"] == "r"
     assert fake.requests[0]["thinking_token_budget"] == 4096
@@ -88,7 +89,13 @@ async def test_critic_injects_feedback_before_executor(tmp_path):
     sidecar = next(r for r in rows if r.get("sidecar_type") == "critic")
     assert sidecar["critic_action"] == "revise"
     assert sidecar["critic_matched_profiles"] == ["kernel"]
+    assert sidecar["input_tokens"] == 10
+    assert sidecar["output_tokens"] == 5
+    assert sidecar["cached_tokens"] == 0
+    assert sidecar["stop_reason"] == "end_turn"
     assert sidecar["reasoning_tokens_observed"] > 0
+    assert stats["backends"]["critic"]["kv_written_tokens"] == 15
+    assert stats["backends"]["critic"]["requests"] == 1
 
 
 async def test_critic_approve_does_not_inject_feedback(tmp_path):

@@ -12,7 +12,7 @@ from dataclasses import replace
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, TextDelta, ThinkingDelta, TextPart, ToolCallPart
+from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
@@ -43,6 +43,7 @@ class PlanningManager:
         *,
         logger: RequestLogger | None = None,
         parent_request_id: str | None = None,
+        account_usage=None,
     ) -> None:
         if not self.cfg.enabled or key in self.plans:
             return
@@ -62,12 +63,15 @@ class PlanningManager:
         apply_reasoning_budget(payload, self.settings, backend, "plan", {}, conv, side_metrics)
         text = ""
         thinking = ""
+        done = Done("end_turn")
         start = time.monotonic()
         async for ev in backend.profile.parse(backend.stream(payload)):
             if isinstance(ev, TextDelta):
                 text += ev.text
             elif isinstance(ev, ThinkingDelta):
                 thinking += ev.text
+            elif isinstance(ev, Done):
+                done = ev
         steps = _parse_steps(text, self.cfg.max_steps)
         if not steps:
             steps = ("Restate the task, inspect relevant files, make the change, verify it.",)
@@ -76,6 +80,8 @@ class PlanningManager:
         metrics["plan_generated"] = 1
         metrics["plan_reasoning_budget_sent"] = side_metrics.get("reasoning_budget_sent")
         metrics["plan_reasoning_tokens_observed"] = HeuristicCounter().count_text(thinking) if thinking else 0
+        if account_usage:
+            account_usage(backend, done, key, count_request=True)
         if logger:
             logger.write({
                 "kind": "sidecar",
@@ -86,6 +92,10 @@ class PlanningManager:
                 "model": backend.model_name,
                 "role": "plan",
                 "wall_ms": int((time.monotonic() - start) * 1000),
+                "input_tokens": done.input_tokens,
+                "output_tokens": done.output_tokens,
+                "cached_tokens": done.cached_tokens,
+                "stop_reason": done.stop_reason,
                 "reasoning_tokens_observed": metrics["plan_reasoning_tokens_observed"],
                 **side_metrics,
             })
