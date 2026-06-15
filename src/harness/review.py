@@ -54,9 +54,12 @@ class ReviewManager:
         text = ""
         thinking = ""
         done = Done("end_turn")
+        ttft_ms: int | None = None
         start = time.monotonic()
         try:
             async for ev in backend.profile.parse(backend.stream(payload)):
+                if ttft_ms is None:
+                    ttft_ms = int((time.monotonic() - start) * 1000)
                 if isinstance(ev, TextDelta):
                     text += ev.text
                 elif isinstance(ev, ThinkingDelta):
@@ -72,7 +75,7 @@ class ReviewManager:
         metrics["review_reasoning_budget_sent"] = side_metrics.get("reasoning_budget_sent")
         metrics["review_reasoning_tokens_observed"] = HeuristicCounter().count_text(thinking) if thinking else 0
         if account_usage:
-            account_usage(backend, done, session_key, count_request=True)
+            account_usage(backend, done, session_key, count_request=True, ttft_ms=ttft_ms)
         if logger:
             logger.write({
                 "kind": "sidecar",
@@ -85,6 +88,7 @@ class ReviewManager:
                 "review_trigger": trigger,
                 "review_action": metrics["review_action"],
                 "wall_ms": int((time.monotonic() - start) * 1000),
+                "ttft_ms": ttft_ms,
                 "input_tokens": done.input_tokens,
                 "output_tokens": done.output_tokens,
                 "cached_tokens": done.cached_tokens,

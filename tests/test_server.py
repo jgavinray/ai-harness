@@ -657,15 +657,48 @@ async def test_llamacpp_kv_used_estimated_from_slots_and_sessions(tmp_path):
     assert d["kv_used_est"] is True
 
 
-async def test_vllm_kv_used_is_measured_not_estimated():
+async def test_vllm_kv_used_uses_resident_estimate_as_floor(tmp_path):
     from harness.config import PoolBackendCfg
 
+    log = tmp_path / "requests.jsonl"
+    log.write_text(json.dumps({
+        "backend": "v", "session_key": "sA", "input_tokens": 1000,
+        "output_tokens": 500, "cached_tokens": 0, "ttft_ms": 1}) + "\n")
+    fake = FakeOpenAI()
+    fake.metrics_text = 'vllm:kv_cache_usage_perc{engine="0"} 0.0\n'
+    settings = Settings()
+    settings.log.requests_path = str(log)
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"],
+                       context_window=10000, max_in_flight=1),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["v"]
+    assert d["kv_used_pct"] == 15.0
+    assert d["kv_used_est"] is True
+
+
+async def test_vllm_kv_used_prefers_higher_live_metric(tmp_path):
+    from harness.config import PoolBackendCfg
+
+    log = tmp_path / "requests.jsonl"
+    log.write_text(json.dumps({
+        "backend": "v", "session_key": "sA", "input_tokens": 1000,
+        "output_tokens": 500, "cached_tokens": 0, "ttft_ms": 1}) + "\n")
     fake = FakeOpenAI()
     fake.metrics_text = 'vllm:kv_cache_usage_perc{engine="0"} 0.42\n'
     settings = Settings()
+    settings.log.requests_path = str(log)
     settings.backends = [
         PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
-                       model="m", roles=["main", "subagent", "fast"]),
+                       model="m", roles=["main", "subagent", "fast"],
+                       context_window=10000, max_in_flight=1),
     ]
     backend_client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"

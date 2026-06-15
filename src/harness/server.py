@@ -97,13 +97,18 @@ async def _kv_usage(b, client: httpx.AsyncClient) -> dict | None:
     if not gauge:
         return None
     base = b.cfg.base_url.rstrip("/").removesuffix("/v1")
+    slots = max(1, b.cfg.max_in_flight or b.in_flight or 1)
+    resident_estimate = sum(list(b.kv_resident.values())[-slots:])
+    estimated_pct = round(100 * min(resident_estimate, b.cfg.context_window * slots) / (b.cfg.context_window * slots), 1)
     try:
         resp = await client.get(base + "/metrics", timeout=2.0)
         if resp.status_code == 200:
             for line in resp.text.splitlines():
                 if line.startswith(gauge):
-                    return {"pct": round(float(line.rsplit(None, 1)[-1]) * 100, 1),
-                            "est": False}
+                    measured_pct = round(float(line.rsplit(None, 1)[-1]) * 100, 1)
+                    if b.cfg.kind == "vllm" and estimated_pct > measured_pct:
+                        return {"pct": estimated_pct, "est": True}
+                    return {"pct": measured_pct, "est": False}
     except (httpx.HTTPError, ValueError):
         pass
     if b.cfg.kind != "llamacpp":
@@ -236,9 +241,19 @@ def create_app(
     if settings.log.requests_path:
         _seed_stats(stats, pool, settings.log.requests_path)
 
-    def account_usage(b, done: Done, skey: str | None = None, *, count_request: bool = False) -> None:
+    def account_usage(
+        b,
+        done: Done,
+        skey: str | None = None,
+        *,
+        count_request: bool = False,
+        ttft_ms: int | None = None,
+    ) -> None:
         if count_request:
             stats["requests"] += 1
+        if ttft_ms is not None:
+            b.ttft_ms.append(ttft_ms)
+            del b.ttft_ms[:-TTFT_WINDOW]
         stats["input_tokens"] += done.input_tokens
         stats["output_tokens"] += done.output_tokens
         stats["cached_tokens"] += done.cached_tokens

@@ -13,9 +13,16 @@
           padding: 0.8rem 1.2rem; min-width: 9rem; }
   .card .v { font-size: 1.5rem; color: #f0f6fc; }
   .card .k { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; }
+  .card .s { margin-top: 0.25rem; font-size: 0.75rem; color: #8b949e; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 0.45rem 0.9rem; border-bottom: 1px solid #21262d; }
   th { color: #8b949e; font-size: 0.75rem; text-transform: uppercase; }
+  .legend { margin-top: 1.5rem; color: #8b949e; font-size: 0.8rem; line-height: 1.45; }
+  .legend h2 { color: #c9d1d9; font-size: 0.8rem; margin: 0 0 0.6rem; text-transform: uppercase; }
+  .legend dl { display: grid; grid-template-columns: max-content minmax(16rem, 1fr);
+               gap: 0.35rem 1rem; margin: 0; max-width: 80rem; }
+  .legend dt { color: #f0f6fc; }
+  .legend dd { margin: 0; }
   .down { color: #f85149; } .up { color: #3fb950; }
   #err { color: #f85149; }
 </style>
@@ -31,6 +38,18 @@
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
+<section class="legend">
+  <h2>Legend</h2>
+  <dl>
+    <dt>resp cache hit</dt><dd>Exact response-cache hit rate since this harness process started; shown as hits over total lookups.</dd>
+    <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
+    <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
+    <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
+    <dt>KV hit recent</dt><dd>Same cache-hit percentage over the most recent request window.</dd>
+    <dt>KV writes</dt><dd>Estimated tokens written to KV: fresh prompt tokens plus output tokens.</dd>
+    <dt>KV used</dt><dd>Current KV occupancy. A leading ~ means the harness is showing a resident-session estimate.</dd>
+  </dl>
+</section>
 <script>
 const fmt = n => (n ?? 0).toLocaleString();
 let last = "";
@@ -48,10 +67,11 @@ async function tick() {
       ["output tok", fmt(s.output_tokens)],
       ["kv cached tok", fmt(s.cached_tokens)],
       ["kv written tok", fmt(s.input_tokens - s.cached_tokens + s.output_tokens)],
-      ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–"],
+      ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–",
+        `${fmt(s.response_cache.hits)} / ${fmt(cacheTotal)}`],
     ];
     document.getElementById("cards").innerHTML = cards
-      .map(([k, v]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div></div>`)
+      .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)
       .join("");
     document.getElementById("rows").innerHTML = Object.entries(s.backends)
       .map(([name, b]) => `<tr>

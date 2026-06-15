@@ -74,9 +74,12 @@ class CriticManager:
         text = ""
         thinking = ""
         done = Done("end_turn")
+        ttft_ms: int | None = None
         start = time.monotonic()
         try:
             async for ev in backend.profile.parse(backend.stream(payload)):
+                if ttft_ms is None:
+                    ttft_ms = int((time.monotonic() - start) * 1000)
                 if isinstance(ev, TextDelta):
                     text += ev.text
                 elif isinstance(ev, ThinkingDelta):
@@ -95,7 +98,7 @@ class CriticManager:
             "critic_reasoning_tokens_observed": observed,
         })
         if account_usage:
-            account_usage(backend, done, key, count_request=True)
+            account_usage(backend, done, key, count_request=True, ttft_ms=ttft_ms)
         if logger:
             logger.write({
                 "kind": "sidecar",
@@ -109,6 +112,7 @@ class CriticManager:
                 "critic_triggers": evidence["triggers"],
                 "critic_matched_profiles": evidence["matched_profiles"],
                 "wall_ms": int((time.monotonic() - start) * 1000),
+                "ttft_ms": ttft_ms,
                 "input_tokens": done.input_tokens,
                 "output_tokens": done.output_tokens,
                 "cached_tokens": done.cached_tokens,
