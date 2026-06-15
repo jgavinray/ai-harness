@@ -46,6 +46,8 @@
     <dt>invalid tools</dt><dd>Percentage of emitted tool calls that failed schema validation after retries.</dd>
     <dt>preflight</dt><dd>Deterministic tool-call checks before client execution. Rewrites are corrected locally; denies retry with local feedback.</dd>
     <dt>ctx compact</dt><dd>Requests where the harness proactively compacted conversation history before backend dispatch.</dd>
+    <dt>ctx tok</dt><dd>Latest request context tokens before and after pipeline compaction.</dd>
+    <dt>state blocks</dt><dd>Free-text completions blocked because the current runtime action state required a tool call.</dd>
     <dt>critic skip</dt><dd>Requests where qwen80 critic was not called because deterministic runtime handling was enough or no critic trigger existed.</dd>
     <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
@@ -82,6 +84,9 @@ async function tick() {
         "rewrites / denies"],
       ["ctx compact", s.runtime ? fmt(s.runtime.context_compactions) : "–",
         s.runtime ? `${fmt(s.runtime.turns_elided)} turns elided` : ""],
+      ["ctx tok", s.runtime ? `${fmt(s.runtime.latest_context_tokens_before)} → ${fmt(s.runtime.latest_context_tokens_after)}` : "–",
+        s.runtime ? `avg ${fmt(s.runtime.context_tokens_before_avg)} → ${fmt(s.runtime.context_tokens_after_avg)}` : ""],
+      ["state blocks", s.runtime ? fmt(s.runtime.action_state_blocks) : "–"],
       ["critic skip", s.runtime ? fmt(Object.values(s.runtime.critic_skips || {}).reduce((a, b) => a + b, 0)) : "–",
         s.runtime ? `${fmt(s.runtime.critic_saved_turn_estimate)} saved est.` : ""],
     ];

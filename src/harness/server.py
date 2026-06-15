@@ -185,6 +185,12 @@ def _empty_runtime_stats() -> dict:
         "context_compactions": 0,
         "turns_elided": 0,
         "tool_results_truncated": 0,
+        "context_samples": 0,
+        "context_tokens_before_total": 0,
+        "context_tokens_after_total": 0,
+        "latest_context_tokens_before": None,
+        "latest_context_tokens_after": None,
+        "action_state_blocks": 0,
         "critic_skips": {},
         "critic_saved_turn_estimate": 0,
     }
@@ -257,6 +263,13 @@ def _record_runtime_stats(runtime_stats: dict, record: dict) -> None:
         runtime_stats["context_compactions"] += 1
     runtime_stats["turns_elided"] += record.get("turns_elided") or 0
     runtime_stats["tool_results_truncated"] += record.get("tool_results_truncated") or 0
+    if record.get("context_tokens_before") is not None:
+        runtime_stats["context_samples"] += 1
+        runtime_stats["context_tokens_before_total"] += record.get("context_tokens_before") or 0
+        runtime_stats["context_tokens_after_total"] += record.get("context_tokens_after") or 0
+        runtime_stats["latest_context_tokens_before"] = record.get("context_tokens_before")
+        runtime_stats["latest_context_tokens_after"] = record.get("context_tokens_after")
+    runtime_stats["action_state_blocks"] += record.get("action_state_blocks") or 0
     _inc_counter(runtime_stats["critic_skips"], record.get("critic_skipped_reason"))
     runtime_stats["critic_saved_turn_estimate"] += record.get("critic_saved_turn_estimate") or 0
 
@@ -267,6 +280,12 @@ def _runtime_summary(runtime_stats: dict) -> dict:
     return {
         **runtime_stats,
         "invalid_tool_rate_pct": invalid_rate,
+        "context_tokens_before_avg": round(
+            runtime_stats["context_tokens_before_total"] / (runtime_stats["context_samples"] or 1)
+        ),
+        "context_tokens_after_avg": round(
+            runtime_stats["context_tokens_after_total"] / (runtime_stats["context_samples"] or 1)
+        ),
     }
 
 

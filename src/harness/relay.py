@@ -9,6 +9,7 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import AsyncIterator, Awaitable, Callable
 
@@ -140,6 +141,18 @@ def _append_tool_required_feedback(conv: Conversation) -> Conversation:
     return replace(conv, turns=turns)
 
 
+def _append_action_state_feedback(conv: Conversation, state: str, allowed: list[str]) -> Conversation:
+    choices = ", ".join(allowed) or "a valid tool"
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[runtime action state requires tool: {state}]"),)),
+        Turn("user", (TextPart(
+            f"The current runtime action state is {state!r}; do not answer in free text yet. "
+            f"Call one of these tools now: {choices}."
+        ),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
     """The model called a catalogued tool whose schema is not surfaced.
     Returns conv with the real ToolDef added (so validation, feedback,
@@ -203,6 +216,8 @@ async def run(
     m.setdefault("preflight_reasons", {})
     m.setdefault("preflight_events", [])
     m.setdefault("emitted_tool_calls", [])
+    m.setdefault("invalid_tool_events", [])
+    m.setdefault("action_state_blocks", 0)
     m.setdefault("first_attempt_constraints", 0)
     guard_metrics(m)
     attempts = 0
@@ -226,6 +241,11 @@ async def run(
         action_state = current_action_state(conv, settings)
         m["action_state"] = action_state.name
         m["action_state_reason"] = action_state.reason
+        state_available_tools = [
+            tool.name for tool in conv.tools
+            if not action_state.allowed_tools or tool.name in action_state.allowed_tools
+        ]
+        effective_requires_tool = action_state.requires_tool and bool(state_available_tools)
         payload_conv = shape_tools_for_state(conv, action_state)
         if constraint_tool_name and all(t.name != constraint_tool_name for t in payload_conv.tools):
             tool = next((t for t in conv.tools if t.name == constraint_tool_name), None)
@@ -235,7 +255,7 @@ async def run(
         payload = profile.render(payload_conv, model_name)
         apply_reasoning_budget(payload, settings, backend, role, body or {}, payload_conv, m)
         required_tool = action_state.required_tool
-        if action_state.requires_tool and required_tool is None and len(payload_conv.tools) == 1:
+        if effective_requires_tool and required_tool is None and len(payload_conv.tools) == 1:
             required_tool = payload_conv.tools[0].name
         if not attempts and backend.constrained and required_tool:
             required = next(
@@ -256,6 +276,7 @@ async def run(
         emitted_valid_call = False
         guarded_call: tuple[str, str] | None = None
         preflight_feedback: tuple[str, str] | None = None
+        action_state_feedback: tuple[str, list[str]] | None = None
         guarded_done: tuple[str, str] | None = None
         skill_feedback: tuple[str, str] | None = None
         invalid_skill: str | None = None
@@ -268,7 +289,7 @@ async def run(
                 has_unverified_edit(conv)
                 or (settings.planning.enabled and "Plan status: Step" in conv.system)
             )
-        )
+        ) or effective_requires_tool
 
         async for ev in profile.parse(backend.stream(payload)):
             if isinstance(ev, (TextDelta, ThinkingDelta)):
@@ -348,15 +369,32 @@ async def run(
                     yield fixed
                 elif attempts < settings.pipeline.repair_retries:
                     bad_call, bad_error = ev, error or "invalid"
+                    raw_arguments = ev.raw_arguments or json.dumps(ev.arguments, separators=(",", ":"))
+                    m["invalid_tool_events"].append({
+                        "tool": ev.name,
+                        "error": bad_error,
+                        "arguments": ev.arguments,
+                        "raw_arguments": raw_arguments,
+                    })
                     break
                 else:
                     m["invalid_calls"] += 1
                     raw = ev.raw_arguments or str(ev.arguments)
+                    raw_arguments = ev.raw_arguments or json.dumps(ev.arguments, separators=(",", ":"))
+                    m["invalid_tool_events"].append({
+                        "tool": ev.name,
+                        "error": bad_error or error,
+                        "arguments": ev.arguments,
+                        "raw_arguments": raw_arguments,
+                    })
                     yield TextDelta(f"\n[invalid tool call {ev.name}: {bad_error or error}]\n{raw[:500]}")
             else:  # Done
                 if buffered_text and not emitted_valid_call and ev.stop_reason != "tool_use":
                     guarded_done = guard_done_claim(conv, "".join(buffered_text), settings)
                     if guarded_done is not None and attempts < settings.pipeline.repair_retries:
+                        break
+                    if effective_requires_tool and attempts < settings.pipeline.repair_retries:
+                        action_state_feedback = (action_state.name, [tool.name for tool in payload_conv.tools])
                         break
                     for text in buffered_text:
                         yield TextDelta(text)
@@ -394,6 +432,14 @@ async def run(
             guard, message = preflight_feedback
             suppress_text = True
             conv = _append_preflight_feedback(conv, guard, message)
+            continue
+
+        if action_state_feedback is not None:
+            attempts += 1
+            state_name, allowed = action_state_feedback
+            suppress_text = True
+            m["action_state_blocks"] += 1
+            conv = _append_action_state_feedback(conv, state_name, allowed)
             continue
 
         if guarded_call is not None:

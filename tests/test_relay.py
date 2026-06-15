@@ -75,7 +75,7 @@ async def test_happy_path():
         finish_chunk("tool_calls"),
     ])
     evs = await collect_events(fake)
-    assert TextDelta("ok") in evs
+    assert TextDelta("ok") not in evs
     assert any(isinstance(e, ToolCall) and e.arguments == {"file_path": "/x"} for e in evs)
     assert evs[-1].stop_reason == "tool_use"
     assert len(fake.requests) == 1
@@ -122,6 +122,36 @@ async def test_bad_then_good_retries_with_feedback():
     # retry text suppressed, valid call emitted
     assert TextDelta("retry noise") not in evs
     assert any(isinstance(e, ToolCall) and e.arguments == {"file_path": "/x"} for e in evs)
+
+
+async def test_invalid_tool_event_logs_full_raw_arguments():
+    fake = FakeOpenAI()
+    raw = '{"wrong_param": "' + ("x" * 700) + '"}'
+    fake.push([
+        tool_chunk("c1", "Read", raw),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([tool_chunk("c2", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    assert any(isinstance(e, ToolCall) and e.arguments == {"file_path": "/x"} for e in evs)
+    assert metrics["invalid_tool_events"][0]["arguments"]["wrong_param"] == "x" * 700
+    assert len(metrics["invalid_tool_events"][0]["raw_arguments"]) > 500
+
+
+async def test_tool_required_state_blocks_free_text():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("I'll inspect it first."), finish_chunk("stop")])
+    fake.push([tool_chunk("c1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    assert len(fake.requests) == 2
+    assert TextDelta("I'll inspect it first.") not in evs
+    assert any(isinstance(e, ToolCall) and e.name == "Read" for e in evs)
+    assert metrics["action_state_blocks"] == 1
+    assert "requires tool" in str(fake.requests[1])
 
 
 async def test_retries_exhausted_degrades_to_text():

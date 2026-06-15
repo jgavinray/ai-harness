@@ -61,8 +61,8 @@ async def test_main_role_not_cached():
     fake = FakeOpenAI()
     fake.push([text_chunk("work"), finish_chunk("stop")])
     async with make_client(fake) as client:
-        await client.post("/v1/messages", json=request_body(stream=False))
-        await client.post("/v1/messages", json=request_body(stream=False))
+        await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
+        await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
     assert len(fake.requests) == 2
 
 
@@ -70,7 +70,7 @@ async def test_stats_per_backend_shape():
     fake = FakeOpenAI()
     fake.push([text_chunk("x"), finish_chunk("stop")])
     async with make_client(fake) as client:
-        await client.post("/v1/messages", json=request_body(stream=False))
+        await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
         stats = (await client.get("/stats")).json()
     b = stats["backends"]["default"]
     assert b["requests"] == 1

@@ -132,7 +132,7 @@ async def test_non_streaming():
     fake = FakeOpenAI()
     fake.push([text_chunk("done"), finish_chunk("stop")])
     async with make_client(fake) as client:
-        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
     body = resp.json()
     assert body["type"] == "message"
     assert body["content"][0] == {"type": "text", "text": "done"}
@@ -236,7 +236,7 @@ async def test_planning_scaffold_generated_once_and_injected():
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
 
     async with client:
-        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
         assert resp.status_code == 200
         resp = await client.post("/v1/messages", json=request_body(stream=False))
         assert resp.status_code == 200
@@ -381,7 +381,7 @@ async def test_backend_relaxed_planning_skips_planner():
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
 
     async with client:
-        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
 
     assert resp.status_code == 200
     assert len(fake.requests) == 1
@@ -513,7 +513,7 @@ async def test_admin_reload_applies_new_roles_and_keeps_stats(tmp_path):
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
 
     async with client:
-        resp = await client.post("/v1/messages", json=request_body(stream=False))
+        resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
         assert resp.status_code == 200
 
         cfg.write_text(_fleet_toml('"main", "fast"'))
