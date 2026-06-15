@@ -223,6 +223,53 @@ For vLLM, start the model with prefix caching enabled when available. For
 llama.cpp server, enable metrics if you want live KV usage in `/stats` and
 `/dashboard`.
 
+### Reasoning Budgets
+
+Reasoning-capable backends opt in with a capability instead of a model name:
+
+```toml
+[[backends]]
+name = "reasoner"
+kind = "vllm"
+base_url = "http://gpu-c:8000/v1"
+model = "reasoning-model-id"
+profile = "qwen"
+context_window = 262144
+roles = ["reasoning", "plan", "review", "critic"]
+capabilities = ["reasoning", "reasoning_budget"]
+```
+
+When `[reasoning_budget] enabled = true`, the harness adds
+`thinking_token_budget` only for backends with `reasoning_budget`. It chooses
+the budget from the routed role, matched risk profiles, request text,
+final-answer reserve, and backend load. If no capable reasoning backend is
+available, the harness degrades normally and records why the budget was skipped.
+
+Use `[[risk_profiles]]` to make escalation generic across model swaps:
+
+```toml
+[[risk_profiles]]
+name = "kernel"
+path_patterns = ["kernel/**", "drivers/**", "fs/**", "mm/**", "net/**", "include/linux/**"]
+text_patterns = ["spinlock", "mutex", "rcu", "atomic", "refcount", "dma", "uaccess", "ioctl"]
+plan_mode = "kernel_change_plan"
+critic_mode = "kernel_critic"
+```
+
+Request logs include the selected budget, mode, clamp reason, matched profiles,
+signals, and observed reasoning tokens so budget quality can be tuned from real
+runs.
+
+### Critic Sidecar
+
+`[critic]` enables a deliberate pre-action critic pass for risky main-agent
+turns. The critic watches recent tool calls/results for edits, configured risk
+profiles, tool errors, and build/test failures. When triggered, it calls a
+`critic` role backend (falling back to `review` or `plan`), logs a sidecar
+record, and injects concise `Critic feedback` into the conversation only when
+revision is needed. If no critic backend is available, execution continues and
+the skip reason is logged.
+
 ## Process Deployment
 
 The harness is a normal long-running ASGI process launched through its module

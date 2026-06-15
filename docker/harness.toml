@@ -1,19 +1,40 @@
 # Container-ready quickstart config.
-# For a backend running directly on the Docker host, keep host.docker.internal.
+# Uses the OpenAI-compatible vLLM APIs exposed by the local model servers.
 
 [server]
 host = "0.0.0.0"
 port = 8484
 
-[backend]
-kind = "openai"
-base_url = "http://host.docker.internal:11434/v1"
-model = "qwen2.5-coder:32b"
-api_key = "local"
+[[backends]]
+name = "qwen35"
+kind = "vllm"
+base_url = "http://192.168.0.33:8000/v1"
+model = "qwen36-35b-heretic"
+profile = "qwen"
+context_window = 262144
+roles = ["fast", "subagent"]
+max_in_flight = 1
 
-[profile]
-name = "qwen"
-context_window = 32768
+[[backends]]
+name = "qwen27"
+kind = "vllm"
+base_url = "http://192.168.0.196:8000/v1"
+model = "qwen3.6-27b"
+profile = "qwen"
+context_window = 262144
+roles = ["main"]
+max_in_flight = 2
+
+[[backends]]
+name = "qwen80-thinking"
+kind = "vllm"
+base_url = "http://192.168.0.196:8001/v1"
+model = "qwen3-next-80b-a3b-thinking"  # Reasoning-only Qwen3-Next Thinking model
+profile = "qwen"
+context_window = 262144
+roles = ["reasoning", "plan", "review", "critic"]
+capabilities = ["reasoning", "reasoning_budget"]
+max_in_flight = 1
 
 [pipeline]
 system_prompt = "replace"
@@ -23,6 +44,52 @@ fewshot = true
 repair_retries = 2
 recent_turns_protected = 4
 reasoning = "thinking"
+
+[reasoning_budget]
+enabled = true
+default_tokens = 1024
+max_auto_tokens = 8192
+max_manual_tokens = 32768
+final_answer_reserve = 4096
+load_shed = true
+fallback_when_unavailable = "degrade"
+
+[critic]
+enabled = true
+max_chars = 12000
+max_tokens = 1200
+min_tool_calls = 1
+triggers = ["risky_path", "edit", "build_failure", "test_failure", "tool_error"]
+
+[reasoning_budget.role_tokens]
+reasoning = 2048
+plan = 4096
+review = 2048
+critic = 4096
+
+[reasoning_budget.mode_tokens]
+file_edit = 1024
+hard_file_edit = 4096
+project_survey = 8192
+architecture_plan = 16384
+deep_architecture_plan = 32768
+integration_debug = 8192
+kernel_change_plan = 16384
+kernel_critic = 8192
+
+[[risk_profiles]]
+name = "kernel"
+path_patterns = ["kernel/**", "drivers/**", "fs/**", "mm/**", "net/**", "include/linux/**"]
+text_patterns = ["spinlock", "mutex", "rcu", "atomic", "refcount", "dma", "uaccess", "ioctl"]
+plan_mode = "kernel_change_plan"
+critic_mode = "kernel_critic"
+
+[[risk_profiles]]
+name = "c_api_refactor"
+path_patterns = ["**/*.h", "**/*.c"]
+text_patterns = ["struct ", "typedef", "extern ", "static inline", "#define"]
+plan_mode = "architecture_plan"
+critic_mode = "critic"
 
 [log]
 requests_path = "logs/requests.jsonl"

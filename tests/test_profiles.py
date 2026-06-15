@@ -121,6 +121,17 @@ async def test_parse_reasoning_content_field():
     assert evs[-1] == Done("end_turn", 0, 0)
 
 
+async def test_parse_reasoning_field():
+    chunks = [
+        chunk({"reasoning": "new thinking field"}),
+        chunk({"content": "answer"}),
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    ]
+    evs = [e async for e in get_profile("qwen").parse(aiter(chunks))]
+    assert evs[0] == ThinkingDelta("new thinking field")
+    assert evs[1] == TextDelta("answer")
+
+
 async def test_r1_think_tags_split_across_chunks():
     chunks = [
         chunk({"content": "<thi"}),

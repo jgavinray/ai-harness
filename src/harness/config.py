@@ -94,6 +94,54 @@ class ReviewCfg(BaseModel):
     ]
 
 
+class CriticCfg(BaseModel):
+    enabled: bool = False
+    max_chars: int = 12000
+    max_tokens: int = 1200
+    min_tool_calls: int = 1
+    triggers: list[str] = [
+        "risky_path",
+        "edit",
+        "build_failure",
+        "test_failure",
+        "tool_error",
+    ]
+
+
+class ReasoningBudgetCfg(BaseModel):
+    enabled: bool = False
+    default_tokens: int = 1024
+    max_auto_tokens: int = 8192
+    max_manual_tokens: int = 32768
+    final_answer_reserve: int = 4096
+    load_shed: bool = True
+    fallback_when_unavailable: str = "degrade"  # degrade | skip | fail
+    role_tokens: dict[str, int] = {
+        "reasoning": 2048,
+        "plan": 4096,
+        "review": 2048,
+        "critic": 4096,
+    }
+    mode_tokens: dict[str, int] = {
+        "file_edit": 1024,
+        "hard_file_edit": 4096,
+        "project_survey": 8192,
+        "architecture_plan": 16384,
+        "deep_architecture_plan": 32768,
+        "integration_debug": 8192,
+        "kernel_change_plan": 16384,
+        "kernel_critic": 8192,
+    }
+
+
+class RiskProfileCfg(BaseModel):
+    name: str
+    path_patterns: list[str] = []
+    text_patterns: list[str] = []
+    plan_mode: str | None = None
+    critic_mode: str | None = None
+
+
 class SkillsCfg(BaseModel):
     enabled: bool = False
     dir: str = "~/.codex/skills"
@@ -129,6 +177,9 @@ class Settings(BaseModel):
     planning: PlanningCfg = PlanningCfg()
     routing: RoutingCfg = RoutingCfg()
     review: ReviewCfg = ReviewCfg()
+    critic: CriticCfg = CriticCfg()
+    reasoning_budget: ReasoningBudgetCfg = ReasoningBudgetCfg()
+    risk_profiles: list[RiskProfileCfg] = []
     skills: SkillsCfg = SkillsCfg()
     research: ResearchCfg = ResearchCfg()
 

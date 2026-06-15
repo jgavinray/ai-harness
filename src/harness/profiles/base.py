@@ -171,8 +171,9 @@ class Profile:
                 evaluated = chunk["timings"].get("prompt_n", evaluated)
             for choice in chunk.get("choices", []):
                 delta = choice.get("delta") or {}
-                if delta.get("reasoning_content"):
-                    yield ThinkingDelta(delta["reasoning_content"])
+                reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                if reasoning:
+                    yield ThinkingDelta(reasoning)
                 if delta.get("content"):
                     if splitter:
                         for kind, text in splitter.feed(delta["content"]):

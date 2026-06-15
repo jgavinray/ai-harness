@@ -34,6 +34,7 @@ from harness.guards import (
 )
 from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
+from harness.reasoning_budget import apply_reasoning_budget
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
 
@@ -148,6 +149,8 @@ async def run(
     settings: Settings,
     metrics: dict | None = None,
     reviewer: ReviewCallback | None = None,
+    role: str = "main",
+    body: dict | None = None,
 ) -> AsyncIterator[IREvent]:
     m = metrics if metrics is not None else {}
     m.setdefault("retries", 0)
@@ -179,6 +182,7 @@ async def run(
 
     while True:
         payload = profile.render(conv, model_name)
+        apply_reasoning_budget(payload, settings, backend, role, body or {}, conv, m)
         if attempts and backend.constrained and constraint_schema is not None:
             payload = backend.apply_constraint(payload, constraint_schema)
 

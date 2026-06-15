@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import time
+
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, TextDelta, TextPart, ToolCallPart, ToolResultPart
+from harness.ir import Conversation, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart
+from harness.log import RequestLogger
+from harness.reasoning_budget import apply_reasoning_budget
+from harness.tokens.counter import HeuristicCounter
 
 
 class ReviewManager:
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.cfg = settings.review
 
     async def review(
@@ -18,6 +24,10 @@ class ReviewManager:
         default_feedback: str,
         pool: BackendPool,
         metrics: dict,
+        *,
+        logger: RequestLogger | None = None,
+        parent_request_id: str | None = None,
+        session_key: str | None = None,
     ) -> str | None:
         if not self.cfg.enabled or trigger not in self.cfg.triggers:
             return None
@@ -38,20 +48,43 @@ class ReviewManager:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        side_metrics: dict = {}
+        apply_reasoning_budget(payload, self.settings, backend, "review", {}, conv, side_metrics)
         text = ""
+        thinking = ""
+        start = time.monotonic()
         try:
             async for ev in backend.profile.parse(backend.stream(payload)):
                 if isinstance(ev, TextDelta):
                     text += ev.text
+                elif isinstance(ev, ThinkingDelta):
+                    thinking += ev.text
         except Exception as exc:
             metrics["review_error"] = str(exc)
             return None
         feedback = _feedback(text)
+        metrics["review_trigger"] = trigger
+        metrics["review_action"] = "revise" if feedback else "approve"
+        metrics["review_reasoning_budget_sent"] = side_metrics.get("reasoning_budget_sent")
+        metrics["review_reasoning_tokens_observed"] = HeuristicCounter().count_text(thinking) if thinking else 0
+        if logger:
+            logger.write({
+                "kind": "sidecar",
+                "sidecar_type": "review",
+                "parent_request_id": parent_request_id,
+                "session_key": session_key,
+                "backend": backend.name,
+                "model": backend.model_name,
+                "role": "review",
+                "review_trigger": trigger,
+                "review_action": metrics["review_action"],
+                "wall_ms": int((time.monotonic() - start) * 1000),
+                "reasoning_tokens_observed": metrics["review_reasoning_tokens_observed"],
+                **side_metrics,
+            })
         if not feedback:
             return None
         metrics["review_generated"] = metrics.get("review_generated", 0) + 1
-        metrics["review_trigger"] = trigger
-        metrics["review_action"] = "revise"
         return feedback
 
 

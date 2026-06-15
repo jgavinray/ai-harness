@@ -28,12 +28,14 @@ from harness.cache import ResponseCache, payload_key
 from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
 from harness.config import Settings, load_settings
-from harness.ir import Done
+from harness.critic import CriticManager
+from harness.ir import Done, ThinkingDelta
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
 from harness.planning import PlanningManager
 from harness.review import ReviewManager
 from harness.research import ResearchManager, memory_fact
+from harness.reasoning_budget import apply_reasoning_budget
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -210,6 +212,7 @@ def create_app(
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
     planner = PlanningManager(settings)
     reviewer = ReviewManager(settings)
+    critic = CriticManager(settings)
     research = ResearchManager(settings)
 
     async def fast_complete(messages: list[dict]) -> str:
@@ -290,12 +293,13 @@ def create_app(
         conv = run_pipeline(conv, req_settings, stages)
         skey = session_key(body)
         rendered = chosen.profile.render(conv, chosen.model_name)
+        apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics := {})
         _dump(settings, "rendered-payload", rendered)
 
         stats["requests"] += 1
         msg_id = "msg_" + uuid.uuid4().hex[:24]
         model = body.get("model", chosen.model_name)
-        metrics: dict = {}
+        metrics.update({"request_max_tokens": conv.params.max_tokens})
         metrics["memory_tokens"] = injected_memory_tokens(conv.system, counter)
         metrics["capability_fallbacks"] = fallback_count
         metrics["routing_intent"] = role
@@ -323,6 +327,7 @@ def create_app(
                         memory.merge(project_key(conv.system), fact)
                     conv = research.inject(conv, brief)
                     rendered = chosen.profile.render(conv, chosen.model_name)
+                    apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
                     _dump(settings, "rendered-payload", rendered)
                 except Exception as exc:
                     metrics["research_error"] = str(exc)
@@ -330,13 +335,35 @@ def create_app(
             if req_settings.planning.enabled:
                 metrics.setdefault("plan_drift", 0)
                 try:
-                    await planner.ensure(skey, conv, pool, metrics)
+                    await planner.ensure(
+                        skey,
+                        conv,
+                        pool,
+                        metrics,
+                        logger=logger,
+                        parent_request_id=msg_id,
+                    )
                     conv = planner.inject(skey, conv)
                     rendered = chosen.profile.render(conv, chosen.model_name)
+                    apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
                     _dump(settings, "rendered-payload", rendered)
                 except BackendError as exc:
                     metrics["plan_error"] = str(exc)
                     metrics.setdefault("plan_drift", 0)
+            try:
+                conv = await critic.maybe_inject(
+                    skey,
+                    conv,
+                    pool,
+                    metrics,
+                    logger=logger,
+                    parent_request_id=msg_id,
+                )
+                rendered = chosen.profile.render(conv, chosen.model_name)
+                apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
+                _dump(settings, "rendered-payload", rendered)
+            except BackendError as exc:
+                metrics["critic_error"] = str(exc)
 
         cacheable = req_settings.cache.enabled and role in req_settings.cache.roles
         cache_key = payload_key(rendered) if cacheable else None
@@ -349,7 +376,14 @@ def create_app(
             if role == "main" and req_settings.review.enabled:
                 async def review_cb(trigger, review_conv, message, review_metrics):
                     return await reviewer.review(
-                        trigger, review_conv, message, pool, review_metrics
+                        trigger,
+                        review_conv,
+                        message,
+                        pool,
+                        review_metrics,
+                        logger=logger,
+                        parent_request_id=msg_id,
+                        session_key=skey,
                     )
             events = relay.run(
                 conv,
@@ -358,6 +392,8 @@ def create_app(
                 req_settings,
                 metrics=metrics,
                 reviewer=review_cb,
+                role=role,
+                body=body,
             )
 
         buffer: list = []
@@ -387,6 +423,11 @@ def create_app(
                         chosen.kv_resident[skey] = ev.input_tokens + ev.output_tokens
                         while len(chosen.kv_resident) > KV_RESIDENT_SESSIONS:
                             chosen.kv_resident.pop(next(iter(chosen.kv_resident)))
+                elif isinstance(ev, ThinkingDelta):
+                    metrics["reasoning_tokens_observed"] = (
+                        metrics.get("reasoning_tokens_observed", 0)
+                        + counter.count_text(ev.text)
+                    )
                 if (cache_key and cached_events is None) or settings.traces.enabled:
                     buffer.append(ev)
                 yield ev
