@@ -45,6 +45,9 @@ class PooledBackend:
         # last good KV-occupancy reading, held across missed polls
         self.kv_used: dict | None = None
         self.kv_used_ts = 0.0
+        # last vLLM Prometheus token-counter sample for live rates
+        self.live_token_counters: dict[str, float] = {}
+        self.live_token_ts = 0.0
 
     @property
     def model_name(self) -> str:

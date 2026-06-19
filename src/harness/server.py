@@ -67,6 +67,12 @@ KV_USAGE_GAUGES = {
     "llamacpp": "llamacpp:kv_cache_usage_ratio",
 }
 
+VLLM_TOKEN_COUNTERS = {
+    "output": "vllm:generation_tokens_total",
+    "prompt": "vllm:prompt_tokens_total",
+    "cached_prompt": "vllm:prompt_tokens_cached_total",
+}
+
 
 KV_RESIDENT_SESSIONS = 8  # sessions remembered per backend for the estimate
 
@@ -146,45 +152,205 @@ def _apply_relaxed(settings: Settings, relaxed: list[str]) -> None:
             settings.pipeline.fewshot = False
 
 
-async def _kv_usage(b, client: httpx.AsyncClient) -> dict | None:
-    """Live KV occupancy: measured from the engine's gauge when it has one,
-    otherwise (modern llama.cpp dropped its KV metrics) estimated from slot
-    capacity (/slots n_ctx) and the sessions most recently resident here."""
-    gauge = KV_USAGE_GAUGES.get(b.cfg.kind)
-    if not gauge:
+def _prometheus_first_value(text: str, metric: str) -> float | None:
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        if line.startswith(metric + "{") or line.startswith(metric + " "):
+            try:
+                return float(line.rsplit(None, 1)[-1])
+            except ValueError:
+                return None
+    return None
+
+
+def _prometheus_sum(text: str, metric: str) -> float | None:
+    total = 0.0
+    found = False
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        if line.startswith(metric + "{") or line.startswith(metric + " "):
+            try:
+                total += float(line.rsplit(None, 1)[-1])
+            except ValueError:
+                continue
+            found = True
+    return total if found else None
+
+
+def _sum_present(*values: float | None) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
         return None
+    return round(sum(present), 1)
+
+
+def _sum_int_present(*values: int | None) -> int | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present)
+
+
+def _counter_int(value: float | None) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stats_state_path(requests_path: str | Path | None) -> Path | None:
+    if not requests_path:
+        return None
+    return Path(requests_path).with_name("stats_state.json")
+
+
+def _load_stats_state(path: Path | None) -> dict:
+    default = {"vllm_totals": {}, "vllm_last_counters": {}}
+    if path is None or not path.exists():
+        return default
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+    if not isinstance(loaded, dict):
+        return default
+    return {
+        "vllm_totals": loaded.get("vllm_totals") if isinstance(loaded.get("vllm_totals"), dict) else {},
+        "vllm_last_counters": (
+            loaded.get("vllm_last_counters")
+            if isinstance(loaded.get("vllm_last_counters"), dict)
+            else {}
+        ),
+    }
+
+
+def _write_stats_state(path: Path | None, state: dict) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")))
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def _update_vllm_totals(state: dict, backend: str, counters: dict[str, float]) -> dict[str, int]:
+    totals_by_backend = state.setdefault("vllm_totals", {})
+    last_by_backend = state.setdefault("vllm_last_counters", {})
+    totals = totals_by_backend.setdefault(backend, {})
+    last = last_by_backend.setdefault(backend, {})
+    if not isinstance(totals, dict):
+        totals = totals_by_backend[backend] = {}
+    if not isinstance(last, dict):
+        last = last_by_backend[backend] = {}
+
+    for name, raw_value in counters.items():
+        value = int(raw_value)
+        previous = _int_or_none(last.get(name))
+        total = _int_or_none(totals.get(name)) or 0
+        if previous is None:
+            total = max(total, value)
+        elif value >= previous:
+            total += value - previous
+        else:
+            # vLLM restarted and reset its Prometheus counter; keep the persisted
+            # total and add tokens generated since the reset.
+            total += value
+        totals[name] = total
+        last[name] = value
+    return {
+        name: parsed
+        for name, value in totals.items()
+        if (parsed := _int_or_none(value)) is not None
+    }
+
+
+def _request_log_paths(path: str | Path) -> list[Path]:
+    p = Path(path)
+    suffix = p.suffix
+    stem = p.name[: -len(suffix)] if suffix else p.name
+    rotated = sorted(p.parent.glob(f"{stem}-*{suffix}"), key=lambda item: item.name)
+    return [*rotated, p] if p.exists() else rotated
+
+
+def _live_token_metrics(b, text: str, now: float) -> dict:
+    if b.cfg.kind != "vllm":
+        return {"counters": {}, "rates": {}}
+    counters = {
+        name: value
+        for name, metric in VLLM_TOKEN_COUNTERS.items()
+        if (value := _prometheus_sum(text, metric)) is not None
+    }
+    if not counters:
+        return {"counters": {}, "rates": {}}
+    rates: dict[str, float] = {}
+    elapsed = now - b.live_token_ts
+    if b.live_token_counters and elapsed > 0:
+        for name, value in counters.items():
+            previous = b.live_token_counters.get(name)
+            if previous is None or value < previous:
+                continue
+            rates[name] = round((value - previous) / elapsed, 1)
+    b.live_token_counters = counters
+    b.live_token_ts = now
+    return {"counters": counters, "rates": rates}
+
+
+async def _live_backend_metrics(b, client: httpx.AsyncClient) -> dict:
+    """Live backend metrics from Prometheus plus slot fallbacks.
+
+    Completed request usage still comes from OpenAI usage blocks. These live
+    rates come directly from vLLM counters so long-running streams are visible
+    before their final usage block arrives.
+    """
+    gauge = KV_USAGE_GAUGES.get(b.cfg.kind)
+    if not gauge and b.cfg.kind != "vllm":
+        return {"kv_used": None, "token_metrics": {"counters": {}, "rates": {}}}
     base = b.cfg.base_url.rstrip("/").removesuffix("/v1")
     slots = max(1, b.cfg.max_in_flight or b.in_flight or 1)
     resident_estimate = sum(list(b.kv_resident.values())[-slots:])
     estimated_pct = round(100 * min(resident_estimate, b.cfg.context_window * slots) / (b.cfg.context_window * slots), 1)
+    token_metrics: dict = {"counters": {}, "rates": {}}
     try:
         resp = await client.get(base + "/metrics", timeout=2.0)
         if resp.status_code == 200:
-            for line in resp.text.splitlines():
-                if line.startswith(gauge):
-                    measured_pct = round(float(line.rsplit(None, 1)[-1]) * 100, 1)
-                    if b.cfg.kind == "vllm" and estimated_pct > measured_pct:
-                        return {"pct": estimated_pct, "est": True}
-                    return {"pct": measured_pct, "est": False}
-    except (httpx.HTTPError, ValueError):
+            now = time.monotonic()
+            token_metrics = _live_token_metrics(b, resp.text, now)
+            if gauge and (value := _prometheus_first_value(resp.text, gauge)) is not None:
+                measured_pct = round(value * 100, 1)
+                if b.cfg.kind == "vllm" and estimated_pct > measured_pct:
+                    return {"kv_used": {"pct": estimated_pct, "est": True}, "token_metrics": token_metrics}
+                return {"kv_used": {"pct": measured_pct, "est": False}, "token_metrics": token_metrics}
+    except httpx.HTTPError:
         pass
     if b.cfg.kind != "llamacpp":
-        return None
+        return {"kv_used": None, "token_metrics": token_metrics}
     try:
         resp = await client.get(base + "/slots", timeout=2.0)
         if resp.status_code != 200:
-            return None
+            return {"kv_used": None, "token_metrics": token_metrics}
         slots = resp.json()
         capacity = sum(s.get("n_ctx") or 0 for s in slots)
         if not slots or not capacity:
-            return None
+            return {"kv_used": None, "token_metrics": token_metrics}
         estimated = sum(list(b.kv_resident.values())[-len(slots):])
         # busy slots report real token counts; never report below them
         live = sum(s.get("n_prompt_tokens") or 0 for s in slots)
         resident = max(estimated, live)
-        return {"pct": round(100 * min(resident, capacity) / capacity, 1), "est": True}
+        return {
+            "kv_used": {"pct": round(100 * min(resident, capacity) / capacity, 1), "est": True},
+            "token_metrics": token_metrics,
+        }
     except (httpx.HTTPError, ValueError):
-        return None
+        return {"kv_used": None, "token_metrics": token_metrics}
 
 
 def _dump(settings: Settings, kind: str, data: dict) -> None:
@@ -395,44 +561,45 @@ def _seed_stats(stats: dict, pool: BackendPool, path: str | Path) -> None:
     Mirrors live counting: response-cache hits never reached the backend, so
     they skip the backend request counter but still carry their token usage.
     """
-    p = Path(path)
-    if not p.exists():
+    paths = _request_log_paths(path)
+    if not paths:
         return
-    with p.open() as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if "critic" in stats:
-                _record_critic_stats(stats["critic"], r)
-            if "runtime" in stats:
-                _record_runtime_stats(stats["runtime"], r)
-            stats["requests"] += 1
-            if r.get("error"):
-                stats["errors"] += 1
-            stats["input_tokens"] += r.get("input_tokens") or 0
-            stats["output_tokens"] += r.get("output_tokens") or 0
-            stats["cached_tokens"] += r.get("cached_tokens") or 0
-            b = pool.get(r.get("backend") or "")
-            if b is None:
-                continue
-            if r.get("cache") != "response":
-                b.requests += 1
-            if r.get("error"):
-                b.errors += 1
-            b.prompt_tokens += r.get("input_tokens") or 0
-            b.cached_tokens += r.get("cached_tokens") or 0
-            b.output_tokens += r.get("output_tokens") or 0
-            b.recent_cache.append((r.get("input_tokens") or 0, r.get("cached_tokens") or 0))
-            skey = r.get("session_key")
-            if skey and (r.get("input_tokens") or 0):
-                b.kv_resident.pop(skey, None)
-                b.kv_resident[skey] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
-                while len(b.kv_resident) > KV_RESIDENT_SESSIONS:
-                    b.kv_resident.pop(next(iter(b.kv_resident)))
-            if r.get("ttft_ms") is not None:
-                b.ttft_ms.append(r["ttft_ms"])
+    for p in paths:
+        with p.open() as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if "critic" in stats:
+                    _record_critic_stats(stats["critic"], r)
+                if "runtime" in stats:
+                    _record_runtime_stats(stats["runtime"], r)
+                stats["requests"] += 1
+                if r.get("error"):
+                    stats["errors"] += 1
+                stats["input_tokens"] += r.get("input_tokens") or 0
+                stats["output_tokens"] += r.get("output_tokens") or 0
+                stats["cached_tokens"] += r.get("cached_tokens") or 0
+                b = pool.get(r.get("backend") or "")
+                if b is None:
+                    continue
+                if r.get("cache") != "response":
+                    b.requests += 1
+                if r.get("error"):
+                    b.errors += 1
+                b.prompt_tokens += r.get("input_tokens") or 0
+                b.cached_tokens += r.get("cached_tokens") or 0
+                b.output_tokens += r.get("output_tokens") or 0
+                b.recent_cache.append((r.get("input_tokens") or 0, r.get("cached_tokens") or 0))
+                skey = r.get("session_key")
+                if skey and (r.get("input_tokens") or 0):
+                    b.kv_resident.pop(skey, None)
+                    b.kv_resident[skey] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+                    while len(b.kv_resident) > KV_RESIDENT_SESSIONS:
+                        b.kv_resident.pop(next(iter(b.kv_resident)))
+                if r.get("ttft_ms") is not None:
+                    b.ttft_ms.append(r["ttft_ms"])
     for b in pool.backends:
         del b.ttft_ms[:-TTFT_WINDOW]
         del b.recent_cache[:-CACHE_WINDOW]
@@ -456,6 +623,9 @@ def create_app(
     critic = CriticManager(settings)
     research = ResearchManager(settings)
     pending_preflight: dict[tuple[str, str], dict] = {}
+    stats_state_path = _stats_state_path(settings.log.requests_path)
+    stats_state = _load_stats_state(stats_state_path)
+    stats_state_lock = asyncio.Lock()
 
     async def fast_complete(messages: list[dict]) -> str:
         candidates = pool.with_role("fast") or pool.backends
@@ -810,34 +980,92 @@ def create_app(
 
     @app.get("/stats")
     async def get_stats():
-        usages = await asyncio.gather(*(_kv_usage(b, client) for b in pool.backends))
+        usages = await asyncio.gather(*(_live_backend_metrics(b, client) for b in pool.backends))
         backends = {}
-        for b, kv_used in zip(pool.backends, usages):
-            if kv_used is not None:
-                b.kv_used, b.kv_used_ts = kv_used, time.monotonic()
-            elif time.monotonic() - b.kv_used_ts < KV_USED_TTL_S:
-                kv_used = b.kv_used  # hold last good reading across a missed poll
-            total_prompt = b.prompt_tokens or 1
-            recent_prompt = sum(p for p, _ in b.recent_cache) or 1
-            recent_cached = sum(c for _, c in b.recent_cache)
-            backends[b.name] = {
-                "model": b.model_name,
-                "roles": b.roles,
-                "requests": b.requests,
-                "errors": b.errors,
-                "in_flight": b.in_flight,
-                "down": b.is_down(),
-                "ttft_p50_ms": _percentile(b.ttft_ms, 0.50),
-                "ttft_p95_ms": _percentile(b.ttft_ms, 0.95),
-                "kv_cache_hit_pct": round(100 * b.cached_tokens / total_prompt, 1),
-                "kv_cache_hit_pct_recent": round(100 * recent_cached / recent_prompt, 1),
-                # fresh prefill + every decoded token = all tokens written to KV
-                "kv_written_tokens": b.prompt_tokens - b.cached_tokens + b.output_tokens,
-                "kv_used_pct": kv_used["pct"] if kv_used else None,
-                "kv_used_est": kv_used["est"] if kv_used else False,
-            }
+        live_output_tps = []
+        live_prompt_tps = []
+        live_cached_prompt_tps = []
+        vllm_decoded_tokens = []
+        vllm_prompt_tokens = []
+        vllm_cached_prompt_tokens = []
+        state_dirty = False
+        async with stats_state_lock:
+            for b, live in zip(pool.backends, usages):
+                kv_used = live.get("kv_used")
+                token_counters = live.get("token_metrics", {}).get("counters", {})
+                token_rates = live.get("token_metrics", {}).get("rates", {})
+                if kv_used is not None:
+                    b.kv_used, b.kv_used_ts = kv_used, time.monotonic()
+                elif time.monotonic() - b.kv_used_ts < KV_USED_TTL_S:
+                    kv_used = b.kv_used  # hold last good reading across a missed poll
+                if token_counters:
+                    persisted = _update_vllm_totals(stats_state, b.name, token_counters)
+                    state_dirty = True
+                else:
+                    persisted = (
+                        stats_state.get("vllm_totals", {}).get(b.name, {})
+                        if isinstance(stats_state.get("vllm_totals"), dict)
+                        else {}
+                    )
+                backend_decoded_tokens = _counter_int(persisted.get("output"))
+                backend_prompt_tokens = _counter_int(persisted.get("prompt"))
+                backend_cached_prompt_tokens = _counter_int(persisted.get("cached_prompt"))
+                backend_decoded_counter = _counter_int(token_counters.get("output"))
+                backend_prompt_counter = _counter_int(token_counters.get("prompt"))
+                backend_cached_prompt_counter = _counter_int(token_counters.get("cached_prompt"))
+                backend_output_tps = token_rates.get("output")
+                backend_prompt_tps = token_rates.get("prompt")
+                backend_cached_prompt_tps = token_rates.get("cached_prompt")
+                if backend_output_tps is not None:
+                    live_output_tps.append(backend_output_tps)
+                if backend_prompt_tps is not None:
+                    live_prompt_tps.append(backend_prompt_tps)
+                if backend_cached_prompt_tps is not None:
+                    live_cached_prompt_tps.append(backend_cached_prompt_tps)
+                if backend_decoded_tokens is not None:
+                    vllm_decoded_tokens.append(backend_decoded_tokens)
+                if backend_prompt_tokens is not None:
+                    vllm_prompt_tokens.append(backend_prompt_tokens)
+                if backend_cached_prompt_tokens is not None:
+                    vllm_cached_prompt_tokens.append(backend_cached_prompt_tokens)
+                total_prompt = b.prompt_tokens or 1
+                recent_prompt = sum(p for p, _ in b.recent_cache) or 1
+                recent_cached = sum(c for _, c in b.recent_cache)
+                backends[b.name] = {
+                    "model": b.model_name,
+                    "roles": b.roles,
+                    "requests": b.requests,
+                    "errors": b.errors,
+                    "in_flight": b.in_flight,
+                    "down": b.is_down(),
+                    "ttft_p50_ms": _percentile(b.ttft_ms, 0.50),
+                    "ttft_p95_ms": _percentile(b.ttft_ms, 0.95),
+                    "kv_cache_hit_pct": round(100 * b.cached_tokens / total_prompt, 1),
+                    "kv_cache_hit_pct_recent": round(100 * recent_cached / recent_prompt, 1),
+                    # fresh prefill + every decoded token = all tokens written to KV
+                    "kv_written_tokens": b.prompt_tokens - b.cached_tokens + b.output_tokens,
+                    "kv_used_pct": kv_used["pct"] if kv_used else None,
+                    "kv_used_est": kv_used["est"] if kv_used else False,
+                    "vllm_decoded_tokens": backend_decoded_tokens,
+                    "vllm_prompt_tokens": backend_prompt_tokens,
+                    "vllm_cached_prompt_tokens": backend_cached_prompt_tokens,
+                    "vllm_decoded_counter": backend_decoded_counter,
+                    "vllm_prompt_counter": backend_prompt_counter,
+                    "vllm_cached_prompt_counter": backend_cached_prompt_counter,
+                    "live_output_tps": backend_output_tps,
+                    "live_prompt_tps": backend_prompt_tps,
+                    "live_cached_prompt_tps": backend_cached_prompt_tps,
+                }
+            if state_dirty:
+                _write_stats_state(stats_state_path, stats_state)
         return JSONResponse({
             **stats,
+            "live_output_tps": _sum_present(*live_output_tps),
+            "live_prompt_tps": _sum_present(*live_prompt_tps),
+            "live_cached_prompt_tps": _sum_present(*live_cached_prompt_tps),
+            "vllm_decoded_tokens": _sum_int_present(*vllm_decoded_tokens),
+            "vllm_prompt_tokens": _sum_int_present(*vllm_prompt_tokens),
+            "vllm_cached_prompt_tokens": _sum_int_present(*vllm_cached_prompt_tokens),
             "backends": backends,
             "critic": _critic_summary(stats["critic"]),
             "runtime": _runtime_summary(stats["runtime"]),

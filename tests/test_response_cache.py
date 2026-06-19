@@ -84,4 +84,4 @@ async def test_dashboard_served():
         resp = await client.get("/dashboard")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "ai-harness" in resp.text
+    assert "Gavin's Token consumption" in resp.text

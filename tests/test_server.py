@@ -711,6 +711,36 @@ async def test_stats_rehydrated_from_request_log(tmp_path):
     assert d["kv_used_pct"] is None  # openai-kind backend exposes no gauge
 
 
+async def test_stats_rehydrated_from_rotated_request_logs(tmp_path):
+    rotated = tmp_path / "requests-20260619-100.jsonl"
+    current = tmp_path / "requests.jsonl"
+    rotated.write_text(json.dumps({
+        "backend": "default", "input_tokens": 100, "output_tokens": 10,
+        "cached_tokens": 20, "ttft_ms": 1,
+    }) + "\n")
+    current.write_text(json.dumps({
+        "backend": "default", "input_tokens": 50, "output_tokens": 5,
+        "cached_tokens": 0, "ttft_ms": 2,
+    }) + "\n")
+
+    settings = Settings()
+    settings.backend.base_url = "http://fake/v1"
+    settings.log.requests_path = str(current)
+    fake = FakeOpenAI()
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        stats = (await client.get("/stats")).json()
+
+    assert stats["input_tokens"] == 150
+    assert stats["output_tokens"] == 15
+    assert stats["cached_tokens"] == 20
+    assert stats["backends"]["default"]["requests"] == 2
+
+
 async def test_recent_cache_hit_window_reflects_current_behavior(tmp_path):
     # 5 old perfect-hit records pushed out of the recent window by 100 misses:
     # lifetime pct stays diluted, recent pct tells the truth about now.
@@ -753,6 +783,98 @@ async def test_stats_polls_live_kv_usage_from_backend_metrics():
     async with client:
         d = (await client.get("/stats")).json()["backends"]["v"]
     assert d["kv_used_pct"] == 42.0
+
+
+async def test_stats_tracks_vllm_decoded_tokens_and_live_rate():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = "\n".join([
+        'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
+        'vllm:generation_tokens_total{engine="0",model_name="m"} 1000',
+        'vllm:prompt_tokens_total{engine="0",model_name="m"} 5000',
+        'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3000',
+    ])
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        first = (await client.get("/stats")).json()
+        fake.metrics_text = "\n".join([
+            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
+            'vllm:generation_tokens_total{engine="0",model_name="m"} 1250',
+            'vllm:prompt_tokens_total{engine="0",model_name="m"} 5100',
+            'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3050',
+        ])
+        second = (await client.get("/stats")).json()
+
+    assert first["vllm_decoded_tokens"] == 1000
+    assert first["backends"]["v"]["vllm_decoded_tokens"] == 1000
+    assert first["live_output_tps"] is None
+    assert second["vllm_decoded_tokens"] == 1250
+    assert second["vllm_prompt_tokens"] == 5100
+    assert second["vllm_cached_prompt_tokens"] == 3050
+    assert second["live_output_tps"] is not None
+    assert second["live_output_tps"] > 0
+    assert second["backends"]["v"]["live_output_tps"] == second["live_output_tps"]
+
+
+async def test_vllm_decoded_tokens_persist_across_harness_and_vllm_restarts(tmp_path):
+    from harness.config import PoolBackendCfg
+
+    def metrics(output: int, prompt: int = 5000, cached: int = 3000) -> str:
+        return "\n".join([
+            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
+            f'vllm:generation_tokens_total{{engine="0",model_name="m"}} {output}',
+            f'vllm:prompt_tokens_total{{engine="0",model_name="m"}} {prompt}',
+            f'vllm:prompt_tokens_cached_total{{engine="0",model_name="m"}} {cached}',
+        ])
+
+    settings = Settings()
+    settings.log.requests_path = str(tmp_path / "requests.jsonl")
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    fake = FakeOpenAI()
+    fake.metrics_text = metrics(1000)
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        first = (await client.get("/stats")).json()
+        fake.metrics_text = metrics(1250)
+        second = (await client.get("/stats")).json()
+
+    assert first["vllm_decoded_tokens"] == 1000
+    assert second["vllm_decoded_tokens"] == 1250
+
+    fake.metrics_text = metrics(1500)
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        after_harness_restart = (await client.get("/stats")).json()
+        fake.metrics_text = metrics(80)  # vLLM restarted; Prometheus counter reset
+        after_vllm_restart = (await client.get("/stats")).json()
+
+    assert after_harness_restart["vllm_decoded_tokens"] == 1500
+    assert after_harness_restart["live_output_tps"] is None
+    assert after_vllm_restart["vllm_decoded_tokens"] == 1580
+    persisted = json.loads((tmp_path / "stats_state.json").read_text())
+    assert persisted["vllm_totals"]["v"]["output"] == 1580
+    assert persisted["vllm_last_counters"]["v"]["output"] == 80
 
 
 async def test_llamacpp_kv_used_estimated_from_slots_and_sessions(tmp_path):

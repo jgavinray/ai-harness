@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ai-harness dashboard</title>
+<title>Gavin's Token consumption</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -28,12 +28,12 @@
 </style>
 </head>
 <body>
-<h1>ai-harness <span id="err"></span></h1>
+<h1>Gavin's Token consumption <span id="err"></span></h1>
 <div class="cards" id="cards"></div>
 <table>
   <thead><tr>
     <th>backend</th><th>model</th><th>roles</th><th>state</th><th>req</th>
-    <th>err</th><th>in-flight</th><th>ttft p50</th><th>ttft p95</th>
+    <th>err</th><th>in-flight</th><th>decode tok/s</th><th>vLLM decoded</th><th>ttft p50</th><th>ttft p95</th>
     <th>kv hit life</th><th>kv hit recent</th><th>kv writes</th><th>kv used</th>
   </tr></thead>
   <tbody id="rows"></tbody>
@@ -51,7 +51,9 @@
     <dt>state blocks</dt><dd>Free-text completions blocked because the current runtime action state required a tool call.</dd>
     <dt>critic skip</dt><dd>Requests where qwen80 critic was not called because deterministic runtime handling was enough or no critic trigger existed.</dd>
     <dt>tools in/pipe/out</dt><dd>Latest per-call tool schema counts: client sent to harness, after pipeline pruning, and backend-visible after runtime action shaping.</dd>
-    <dt>tok</dt><dd>Tokens reported by the backend usage block.</dd>
+    <dt>harness output tok</dt><dd>Completed response output tokens reported by backend usage blocks and recorded by the harness.</dd>
+    <dt>vLLM decoded tok</dt><dd>Persisted cumulative decoded tokens from vLLM generation-token counter deltas, retained across harness and vLLM restarts.</dd>
+    <dt>decode tok/s</dt><dd>Live decoded-token rate from vLLM counter deltas between dashboard polls; blank until two metric samples exist.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
     <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
     <dt>KV hit recent</dt><dd>Same cache-hit percentage over the most recent request window.</dd>
@@ -61,6 +63,8 @@
 </section>
 <script>
 const fmt = n => (n ?? 0).toLocaleString();
+const fmtMaybe = n => n == null ? "–" : fmt(n);
+const fmtRate = n => n == null ? "–" : Number(n).toLocaleString(undefined, {maximumFractionDigits: 1});
 let last = "";
 async function tick() {
   try {
@@ -73,7 +77,9 @@ async function tick() {
     const cards = [
       ["requests", fmt(s.requests)],
       ["input tok", fmt(s.input_tokens)],
-      ["output tok", fmt(s.output_tokens)],
+      ["harness output tok", fmt(s.output_tokens)],
+      ["vLLM decoded tok", fmtMaybe(s.vllm_decoded_tokens)],
+      ["decode tok/s", fmtRate(s.live_output_tps)],
       ["kv cached tok", fmt(s.cached_tokens)],
       ["kv written tok", fmt(s.input_tokens - s.cached_tokens + s.output_tokens)],
       ["resp cache hit", cacheTotal ? Math.round(100 * s.response_cache.hits / cacheTotal) + "%" : "–",
@@ -103,6 +109,7 @@ async function tick() {
         <td>${name}</td><td>${b.model}</td><td>${b.roles.join(", ")}</td>
         <td class="${b.down ? "down" : "up"}">${b.down ? "DOWN" : "up"}</td>
         <td>${fmt(b.requests)}</td><td>${fmt(b.errors)}</td><td>${b.in_flight}</td>
+        <td>${fmtRate(b.live_output_tps)}</td><td>${fmtMaybe(b.vllm_decoded_tokens)}</td>
         <td>${fmt(b.ttft_p50_ms)} ms</td><td>${fmt(b.ttft_p95_ms)} ms</td>
         <td>${b.kv_cache_hit_pct}%</td>
         <td>${b.kv_cache_hit_pct_recent}%</td>
