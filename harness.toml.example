@@ -27,6 +27,9 @@ reasoning = "thinking"     # thinking | strip
 workflow_guards = true
 guard_edit_without_read = true
 guard_verify_after_edit = true
+client_colocated = false    # true only if Claude Code runs on THIS host; when false the proxy
+                            # skips parent-dir/allowed-root checks against its own disk (those test
+                            # the wrong filesystem on a remote client and can deadlock Write)
 
 [debug]
 dump_prompts = false

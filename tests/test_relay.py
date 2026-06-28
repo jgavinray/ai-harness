@@ -215,6 +215,46 @@ async def test_cross_turn_loop_broken_with_feedback():
     assert evs[-1].stop_reason == "end_turn"
 
 
+def conv_with_bash_description_repeats(n: int) -> Conversation:
+    turns: list[Turn] = [Turn("user", (TextPart("inspect directory"),))]
+    for i in range(n):
+        turns.append(Turn("assistant", (ToolCallPart(
+            f"b{i}",
+            "Bash",
+            {"command": "ls -la /tmp", "description": f"check {i}"},
+        ),)))
+        turns.append(Turn("user", (ToolResultPart(f"b{i}", "same listing"),)))
+    return Conversation(
+        "sys", tuple(turns),
+        (ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA),),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_cross_turn_loop_ignores_bash_description_metadata():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b9", "Bash", "{\"command\": \"ls -la /tmp\", \"description\": \"check again\"}"),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([text_chunk("the listing is already available"), finish_chunk("stop")])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_bash_description_repeats(3),
+            get_profile("qwen"),
+            backend,
+            Settings(),
+            metrics,
+        )
+    ]
+    assert not any(isinstance(e, ToolCall) for e in evs)
+    assert len(fake.requests) == 2
+    assert metrics["loop_breaks"] == 1
+    assert "identical" in str(fake.requests[1])
+
+
 async def test_cross_turn_loop_records_guard_fire():
     fake = FakeOpenAI()
     fake.push([tool_chunk("c9", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
@@ -418,12 +458,249 @@ async def test_preflight_denies_write_missing_parent(tmp_path):
     ])
     fake.push([text_chunk("I need to create the directory first."), finish_chunk("stop")])
     backend = make(fake, "openai")
+    settings = Settings()
+    settings.pipeline.client_colocated = True
     metrics: dict = {}
-    evs = [e async for e in run(conv, get_profile("qwen"), backend, Settings(), metrics)]
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
     assert not any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
     assert metrics["preflight_denies"] == 1
     assert metrics["preflight_reasons"]["missing_parent"] == 1
     assert "parent directory" in str(fake.requests[1])
+
+
+async def test_missing_parent_requires_exact_absolute_mkdir_next(tmp_path):
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    missing = tmp_path / "missing" / "x.txt"
+    parent = missing.parent
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("create file"),)),),
+        (write, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("w1", "Write", f'{{"file_path": "{missing}", "content": "x"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "ls -la .", "description": "inspect"}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([
+        tool_chunk("b2", "Bash", f'{{"command": "mkdir -p {parent}", "description": "create parent"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    backend = make(fake, "openai")
+    settings = Settings()
+    settings.pipeline.client_colocated = True
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
+    assert len(fake.requests) == 3
+    assert not any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
+    assert any(
+        isinstance(e, ToolCall)
+        and e.name == "Bash"
+        and e.arguments["command"] == f"mkdir -p {parent}"
+        for e in evs
+    )
+    assert metrics["preflight_denies"] == 2
+    assert metrics["preflight_reasons"]["missing_parent"] == 1
+    assert metrics["preflight_reasons"]["missing_parent_next_action"] == 1
+    assert f"mkdir -p {parent}" in str(fake.requests[1])
+    assert f"mkdir -p {parent}" in str(fake.requests[2])
+
+
+async def test_preflight_denies_bash_heredoc_file_creation_even_in_agentic_os(tmp_path):
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    target = tmp_path / "x.sh"
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("create file"),)),),
+        (write, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk(
+            "b1",
+            "Bash",
+            '{"command": "cat > /tmp/create_files.sh << \\"EOF\\"\\necho hi\\nEOF\\nbash /tmp/create_files.sh"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([
+        tool_chunk("w1", "Write", f'{{"file_path": "{target}", "content": "echo hi"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    settings = Settings()
+    settings.pipeline.policy_owner = "agentic_os"
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
+    assert len(fake.requests) == 2
+    assert not any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
+    assert metrics["preflight_denies"] == 1
+    assert metrics["preflight_reasons"]["use_write_tool"] == 1
+    assert "call Write" in str(fake.requests[1])
+
+
+async def test_remote_proxy_allows_write_missing_parent(tmp_path):
+    """A non-colocated harness must not block Write on its own missing dirs.
+
+    The client runs on a different host, so the parent existing (or not) on the
+    harness filesystem is meaningless. With client_colocated False (default) the
+    Write must pass straight through instead of deadlocking on missing_parent.
+    """
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("create file"),)),),
+        (write,),
+        GenParams(max_tokens=512, stream=True),
+    )
+    missing = tmp_path / "missing" / "x.txt"
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("w1", "Write", f'{{"file_path": "{missing}", "content": "x"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    settings = Settings()  # client_colocated defaults to False
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
+    assert len(fake.requests) == 1
+    assert any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
+    assert metrics["preflight_denies"] == 0
+
+
+async def test_remote_proxy_skips_missing_parent_next_action(tmp_path):
+    """The forced-mkdir state machine must not engage on a non-colocated harness.
+
+    Even if a prior turn carries a <missing_parent> marker, a non-colocated
+    harness has no authority over the client filesystem, so it must not lock the
+    model into an mkdir-only surface.
+    """
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    missing = tmp_path / "missing" / "x.txt"
+    conv = Conversation(
+        "sys",
+        (
+            Turn("user", (TextPart("create file"),)),
+            Turn(
+                "user",
+                (TextPart(f"<missing_parent>{missing.parent}</missing_parent>"),),
+            ),
+        ),
+        (write, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "ls -la .", "description": "inspect"}'),
+        finish_chunk("tool_calls"),
+    ])
+    settings = Settings()  # client_colocated defaults to False
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [e async for e in run(conv, get_profile("qwen"), backend, settings, metrics)]
+    assert len(fake.requests) == 1
+    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
+    assert metrics["preflight_denies"] == 0
+
+
+async def test_preflight_denial_uses_reviewer_feedback(tmp_path):
+    write_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    }
+    write = ToolDef("Write", "writes", write_schema, write_schema)
+    bash = ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA)
+    target = tmp_path / "x.sh"
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("create file"),)),),
+        (write, bash),
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk(
+            "b1",
+            "Bash",
+            '{"command": "cat > /tmp/create_files.sh << \\"EOF\\"\\necho hi\\nEOF"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([
+        tool_chunk("w1", "Write", f'{{"file_path": "{target}", "content": "echo hi"}}'),
+        finish_chunk("tool_calls"),
+    ])
+    seen: list[tuple[str, str]] = []
+
+    async def reviewer(trigger, review_conv, message, review_metrics):
+        seen.append((trigger, message))
+        review_metrics["reviewer_called_by_test"] = True
+        return "Use Write directly for file creation."
+
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv,
+            get_profile("qwen"),
+            backend,
+            Settings(),
+            metrics,
+            reviewer=reviewer,
+        )
+    ]
+    assert seen
+    assert seen[0][0] == "use_write_tool"
+    assert any(isinstance(e, ToolCall) and e.name == "Write" for e in evs)
+    assert metrics["reviewer_called_by_test"] is True
+    assert "Reviewer feedback" in str(fake.requests[1])
+    assert "Use Write directly" in str(fake.requests[1])
 
 
 async def test_preflight_denies_dangerous_bash():
