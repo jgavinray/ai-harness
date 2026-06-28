@@ -110,6 +110,59 @@ def _path_parent_missing(path: str) -> bool:
     return not Path(path).parent.exists()
 
 
+def _missing_parent_feedback(path: str) -> str:
+    parent = str(Path(path).parent)
+    return (
+        f"The parent directory for {path!r} does not exist. "
+        f"<missing_parent>{parent}</missing_parent> Required next action: "
+        f"call Bash with command exactly: mkdir -p {shlex.quote(parent)}. "
+        "Do not inspect, stat, find, ls, or create a relative path. "
+        "Then retry Write."
+    )
+
+
+def _pending_missing_parent(conv: Conversation) -> str | None:
+    for turn in reversed(conv.turns):
+        if turn.role != "user":
+            continue
+        for part in turn.parts:
+            text = getattr(part, "text", None)
+            if not isinstance(text, str):
+                continue
+            match = re.search(r"<missing_parent>([^<]+)</missing_parent>", text)
+            if match:
+                return match.group(1)
+        return None
+    return None
+
+
+def _mkdir_creates_parent(command: str, parent: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens or Path(tokens[0]).name != "mkdir":
+        return False
+    parent_path = Path(parent)
+    for token in tokens[1:]:
+        if token in {"&&", "||", "|", ";"}:
+            break
+        if token.startswith("-"):
+            continue
+        target = Path(token)
+        if target.is_absolute() and (target == parent_path or parent_path in target.parents):
+            return True
+    return False
+
+
+def _missing_parent_next_action_feedback(parent: str) -> str:
+    return (
+        f"The previous Write is blocked until this exact parent exists: {parent!r}. "
+        f"Call Bash with command exactly: mkdir -p {shlex.quote(parent)}. "
+        "Do not inspect, stat, find, ls, or create a relative path."
+    )
+
+
 def _outside_allowed_roots(path: str, settings: Settings) -> bool:
     if not settings.pipeline.allowed_roots or not Path(path).is_absolute():
         return False
@@ -142,6 +195,23 @@ def _grep_alternation_without_extended(command: str) -> str | None:
 def _shell_redirect_path(command: str) -> str | None:
     match = re.search(r"(?:^|\s)(?:>|>>)\s*(['\"]?)([^'\"\s]+)\1", command)
     return match.group(2) if match else None
+
+
+def _shell_file_creation_feedback(command: str, conv: Conversation) -> str | None:
+    if not _has_tool(conv, "Write"):
+        return None
+    if (
+        "<<" in command
+        or re.search(r"(?:^|[;&|]\s*)(?:cat|printf|echo)\b[^;&|]*(?:>|>>)", command)
+        or re.search(r"(?:^|[;&|]\s*)tee\s+(?:-a\s+)?[^\s;&|]+", command)
+    ):
+        return (
+            "Do not create or edit files through Bash redirection, heredocs, tee, "
+            "or temporary scripts when the Write tool is available. Use Bash only "
+            "for `mkdir -p` directory creation, then call Write with explicit "
+            "file_path and content. For multiple files, call Write once per file."
+        )
+    return None
 
 
 def classify_bash_command(command: str) -> str:
@@ -291,6 +361,10 @@ def preflight_tool_call(
     original = dict(call.arguments)
     bash_class: str | None = None
     external_policy = settings.pipeline.policy_owner == "agentic_os"
+    # Path-existence and allowed-root checks only make sense when the client
+    # shares this harness's filesystem. On a remote proxy they test the wrong
+    # disk and deadlock Write behind an unsatisfiable missing_parent.
+    colocated = settings.pipeline.client_colocated
 
     rewritten, path_rewritten = normalize_confused_paths(call)
     if path_rewritten:
@@ -302,6 +376,18 @@ def preflight_tool_call(
             rewritten_arguments=dict(rewritten.arguments),
         )
     call = rewritten
+    pending_parent = _pending_missing_parent(conv) if colocated else None
+    if pending_parent is not None:
+        command = str(call.arguments.get("command") or "") if call.name == "Bash" else ""
+        if call.name != "Bash" or not _mkdir_creates_parent(command, pending_parent):
+            return PreflightDecision(
+                "deny",
+                call,
+                "missing_parent_next_action",
+                _missing_parent_next_action_feedback(pending_parent),
+                original_arguments=original,
+                bash_command_class=classify_bash_command(command) if command else None,
+            )
     if not external_policy and _repeated_failing_call(conv, call):
         return PreflightDecision(
             "deny",
@@ -316,7 +402,7 @@ def preflight_tool_call(
         value = call.arguments.get(key)
         if not isinstance(value, str):
             continue
-        if _outside_allowed_roots(value, settings):
+        if colocated and _outside_allowed_roots(value, settings):
             return PreflightDecision(
                 "deny",
                 call,
@@ -324,12 +410,12 @@ def preflight_tool_call(
                 f"{value!r} is outside the configured allowed roots. Choose a path under an allowed root.",
                 original_arguments=original,
             )
-        if call.name == "Write" and _path_parent_missing(value):
+        if colocated and call.name == "Write" and _path_parent_missing(value):
             return PreflightDecision(
                 "deny",
                 call,
                 "missing_parent",
-                f"The parent directory for {value!r} does not exist. Create the directory first, then retry Write.",
+                _missing_parent_feedback(value),
                 original_arguments=original,
             )
 
@@ -342,6 +428,16 @@ def preflight_tool_call(
                 call,
                 "dangerous_command",
                 "This Bash command is classified as dangerous and will not be run by the harness.",
+                original_arguments=original,
+                bash_command_class=bash_class,
+            )
+        file_creation_feedback = _shell_file_creation_feedback(command, conv)
+        if file_creation_feedback is not None:
+            return PreflightDecision(
+                "deny",
+                call,
+                "use_write_tool",
+                file_creation_feedback,
                 original_arguments=original,
                 bash_command_class=bash_class,
             )
@@ -359,13 +455,12 @@ def preflight_tool_call(
                 bash_command_class=bash_class,
             )
         redirect_path = _shell_redirect_path(command)
-        if redirect_path and _path_parent_missing(redirect_path):
+        if colocated and redirect_path and _path_parent_missing(redirect_path):
             return PreflightDecision(
                 "deny",
                 call,
                 "missing_parent",
-                f"The shell redirection target {redirect_path!r} has no existing parent directory. "
-                "Create the parent directory first.",
+                _missing_parent_feedback(redirect_path),
                 original_arguments=original,
                 bash_command_class=bash_class,
             )

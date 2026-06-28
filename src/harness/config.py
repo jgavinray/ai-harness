@@ -55,6 +55,12 @@ class PipelineCfg(BaseModel):
     guard_edit_without_read: bool = True
     guard_verify_after_edit: bool = True
     allowed_roots: list[str] = []
+    # The Claude Code client shares this harness's filesystem (localhost deploy).
+    # When False (default), the harness is a remote proxy and MUST NOT validate
+    # client paths against its own disk: parent-existence and allowed-root checks
+    # would test the wrong filesystem and can deadlock Write behind an
+    # unsatisfiable missing_parent. Only enable for same-host deployments.
+    client_colocated: bool = False
 
 
 class DebugCfg(BaseModel):
