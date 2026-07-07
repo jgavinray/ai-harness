@@ -164,6 +164,19 @@ def _append_give_up_feedback(conv: Conversation, allowed: list[str]) -> Conversa
     return replace(conv, turns=turns)
 
 
+def _honest_failure_text(metrics: dict) -> str:
+    events = metrics.get("invalid_tool_events") or []
+    detail = ""
+    if events:
+        last = events[-1]
+        detail = f" Last invalid attempt: {last.get('tool')} ({last.get('error')})."
+    return (
+        "\n[harness] Task step failed: the model could not produce a valid "
+        f"next action within the retry budget.{detail} Nothing was applied "
+        "silently; this step needs attention.\n"
+    )
+
+
 def _append_action_state_feedback(conv: Conversation, state: str, allowed: list[str]) -> Conversation:
     choices = ", ".join(allowed) or "a valid tool"
     turns = conv.turns + (
@@ -485,10 +498,14 @@ async def run(
                         and not buffered_text
                         and ev.stop_reason != "tool_use"
                         and expects_tool_retry
-                        and attempts < settings.pipeline.repair_retries
                     ):
-                        give_up_feedback = True
-                        break
+                        if attempts < settings.pipeline.repair_retries:
+                            give_up_feedback = True
+                            break
+                        m["gave_up_honestly"] = 1
+                        yield TextDelta(_honest_failure_text(m))
+                        yield Done("end_turn", total_input, total_output, total_cached)
+                        return
                     yield Done(ev.stop_reason, total_input, total_output, total_cached)
                 return
 

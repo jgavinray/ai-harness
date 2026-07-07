@@ -1122,6 +1122,26 @@ async def test_pure_prose_answer_passes_through():
     assert metrics["contract_feedback"] == 0
 
 
+async def test_give_up_exhaustion_ends_with_honest_failure():
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c1", "Read", '{"wrong": 1}'), finish_chunk("tool_calls")])
+    fake.push([text_chunk("giving up"), finish_chunk("stop")])  # repeats until budget gone
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv_plain_task(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    # attempt 1: invalid call (retry 1); attempt 2: prose give-up (contract feedback, retry 2);
+    # attempt 3: prose again with budget exhausted -> honest failure
+    assert len(fake.requests) == 3
+    assert metrics["gave_up_honestly"] == 1
+    failure_texts = [e.text for e in evs if isinstance(e, TextDelta) and "[harness]" in e.text]
+    assert failure_texts and "valid next action" in failure_texts[0]
+    done = evs[-1]
+    assert done.stop_reason == "end_turn"
+    # attempts 2 and 3 reached their usage chunks (10/5 each); attempt 1 broke early
+    assert done.input_tokens == 20
+    assert done.output_tokens == 10
+
+
 async def test_usage_accumulates_across_feedback_attempts():
     fake = FakeOpenAI()
     fake.push([text_chunk("thinking out loud"), finish_chunk("stop")])
