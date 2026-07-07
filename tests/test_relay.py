@@ -1081,6 +1081,47 @@ async def test_invalid_hidden_skill_forces_concrete_tool_retry(tmp_path):
     assert "Your previous response still did not call a tool" in str(fake.requests[2])
 
 
+def conv_plain_task() -> Conversation:
+    return Conversation(
+        "sys",
+        (Turn("user", (TextPart("please make the failing math pass"),)),),
+        (ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA),),
+        GenParams(max_tokens=512, stream=True),
+    )
+
+
+async def test_prose_give_up_after_failed_call_is_fed_back():
+    fake = FakeOpenAI()
+    fake.push([
+        text_chunk("I'll fix it."),
+        tool_chunk("c1", "Read", '{"wrong": 1}'),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([text_chunk("I'll start by using the debugging skill."), finish_chunk("stop")])
+    fake.push([tool_chunk("c2", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv_plain_task(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    assert len(fake.requests) == 3
+    assert any(isinstance(e, ToolCall) and e.arguments == {"file_path": "/x"} for e in evs)
+    assert metrics["contract_feedback"] == 1
+    assert metrics["guard_fires"].get("give_up") == 1
+    assert "without a valid tool call" in str(fake.requests[2])
+    assert evs[-1].stop_reason == "tool_use"
+
+
+async def test_pure_prose_answer_passes_through():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("The answer is 4."), finish_chunk("stop")])
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv_plain_task(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    assert len(fake.requests) == 1
+    assert any(isinstance(e, TextDelta) and "The answer is 4." in e.text for e in evs)
+    assert evs[-1].stop_reason == "end_turn"
+    assert metrics["contract_feedback"] == 0
+
+
 async def test_usage_accumulates_across_feedback_attempts():
     fake = FakeOpenAI()
     fake.push([text_chunk("thinking out loud"), finish_chunk("stop")])

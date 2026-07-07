@@ -557,3 +557,17 @@ Expected: `zero-token-deaths=0`. Report the success count either way — success
 - Spec coverage: brick 1 of the consistency spec = "contract enforcement + usage fix". Give-up feedback (Task 2), honest failure (Task 3), usage accumulation (Task 1) — covered. The spec's done-claim gate already exists and blocks (verified by existing `test_done_claim_after_edit_requires_verification`); no task needed. Per-session contract cap and remaining bricks (ruler v2, first-attempt constraints) are later bricks by design.
 - Type consistency: `total_input`/`total_output`/`total_cached` defined in Task 1, consumed in Tasks 2–3; `give_up_feedback` defined in Task 2, extended in Task 3; helper names match between definition and dispatch.
 - The give-up condition includes `not buffered_text` so it can never double-fire with the buffered-text path, and `stop_reason != "tool_use"` so `test_retries_exhausted_degrades_to_text` is unaffected.
+
+## Execution Deviation (recorded 2026-07-07)
+
+Task 2 as planned used `attempted_action` (any ToolCall event seen this request)
+in the give-up condition. That broke the two cross-turn loop-break tests: loop
+feedback explicitly invites a free-text conclusion ("state your conclusion"),
+so a prose-only end_turn after it is a legitimate answer, not a give-up. The
+implemented condition instead uses `expects_tool_retry`, set True only by
+feedback paths that explicitly demand a tool retry (invalid tool call,
+action-state block, invalid-skill retry, give-up feedback itself), cleared by
+loop-break feedback and by any emitted valid call. `effective_requires_tool`
+was also dropped from the give-up check — the buffered-text path already
+enforces it on unsuppressed attempts, and suppressed post-loop-break prose must
+stay accepted (encoded in test_cross_turn_loop_ignores_bash_description_metadata).

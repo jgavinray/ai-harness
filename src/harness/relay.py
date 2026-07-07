@@ -151,6 +151,19 @@ def _append_tool_required_feedback(conv: Conversation) -> Conversation:
     return replace(conv, turns=turns)
 
 
+def _append_give_up_feedback(conv: Conversation, allowed: list[str]) -> Conversation:
+    choices = ", ".join(allowed) or "a valid tool"
+    turns = conv.turns + (
+        Turn("assistant", (TextPart("[turn ended without a valid tool call]"),)),
+        Turn("user", (TextPart(
+            "You attempted to act this turn but ended without a valid tool call. "
+            "Do not stop and do not answer in free text. Continue the task now by "
+            f"calling one of these tools: {choices}."
+        ),)),
+    )
+    return replace(conv, turns=turns)
+
+
 def _append_action_state_feedback(conv: Conversation, state: str, allowed: list[str]) -> Conversation:
     choices = ", ".join(allowed) or "a valid tool"
     turns = conv.turns + (
@@ -241,6 +254,8 @@ async def run(
     m.setdefault("invalid_tool_events", [])
     m.setdefault("action_state_blocks", 0)
     m.setdefault("first_attempt_constraints", 0)
+    m.setdefault("contract_feedback", 0)
+    m.setdefault("gave_up_honestly", 0)
     guard_metrics(m)
     attempts = 0
     suppress_text = False
@@ -248,6 +263,9 @@ async def run(
     constraint_tool_name: str | None = None
     skill_compiler = SkillCompiler(settings, profile.name)
     require_tool_after_invalid_skill = False
+    # True while the latest feedback explicitly demanded a tool retry; a
+    # prose-only end_turn in that window is a give-up, not an answer.
+    expects_tool_retry = False
     total_input = 0
     total_output = 0
     total_cached = 0
@@ -314,6 +332,7 @@ async def run(
         skill_feedback: tuple[str, str] | None = None
         invalid_skill: str | None = None
         tool_required_after_invalid_skill = False
+        give_up_feedback = False
         buffered_text: list[str] = []
         buffer_text = (
             settings.pipeline.workflow_guards
@@ -405,6 +424,7 @@ async def run(
                         break
                     emitted_valid_call = True
                     require_tool_after_invalid_skill = False
+                    expects_tool_retry = False
                     m["valid_calls"] += 1
                     m["emitted_tool_calls"].append({
                         "id": fixed.id,
@@ -460,6 +480,15 @@ async def run(
                     ):
                         tool_required_after_invalid_skill = True
                         break
+                    if (
+                        not emitted_valid_call
+                        and not buffered_text
+                        and ev.stop_reason != "tool_use"
+                        and expects_tool_retry
+                        and attempts < settings.pipeline.repair_retries
+                    ):
+                        give_up_feedback = True
+                        break
                     yield Done(ev.stop_reason, total_input, total_output, total_cached)
                 return
 
@@ -467,6 +496,9 @@ async def run(
             attempts += 1
             m["loop_breaks"] += 1
             increment_guard(m, "same_approach")
+            # loop feedback invites a free-text conclusion; do not treat a
+            # following prose-only end_turn as a give-up
+            expects_tool_retry = False
             suppress_text = True
             feedback = (
                 f"You have already called {loop_call.name!r} with these identical "
@@ -488,6 +520,7 @@ async def run(
             attempts += 1
             state_name, allowed = action_state_feedback
             suppress_text = True
+            expects_tool_retry = True
             m["action_state_blocks"] += 1
             conv = _append_action_state_feedback(conv, state_name, allowed)
             continue
@@ -514,12 +547,14 @@ async def run(
             attempts += 1
             suppress_text = True
             require_tool_after_invalid_skill = True
+            expects_tool_retry = True
             conv = _append_invalid_skill_feedback(conv, invalid_skill)
             continue
 
         if tool_required_after_invalid_skill:
             attempts += 1
             suppress_text = True
+            expects_tool_retry = True
             conv = _append_tool_required_feedback(conv)
             continue
 
@@ -533,6 +568,17 @@ async def run(
             conv = _append_guard_feedback(conv, guard, await reviewed(guard, message))
             continue
 
+        if give_up_feedback:
+            attempts += 1
+            m["contract_feedback"] += 1
+            increment_guard(m, "give_up")
+            suppress_text = True
+            expects_tool_retry = True
+            conv = _append_give_up_feedback(
+                conv, [tool.name for tool in payload_conv.tools]
+            )
+            continue
+
         if bad_call is None:
             # stream ended without a Done (backend quirk); close the turn
             yield Done(
@@ -544,6 +590,7 @@ async def run(
         attempts += 1
         m["retries"] += 1
         suppress_text = True
+        expects_tool_retry = True
         tool = next((t for t in conv.tools if t.name == bad_call.name), None)
         constraint_schema = tool.input_schema if tool else None
         constraint_tool_name = bad_call.name
