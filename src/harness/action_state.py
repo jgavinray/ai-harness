@@ -10,12 +10,18 @@ import re
 from dataclasses import dataclass, replace
 
 from harness.config import Settings
-from harness.guards import has_unverified_edit
+from harness.guards import (
+    SHORT_INSTRUCTION_MAX_CHARS,
+    has_unverified_edit,
+    is_verify_instruction,
+)
 from harness.ir import Conversation, TextPart, ToolCallPart
 from harness.planning import plan_status
 
 READONLY_TOOLS = ("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch")
-INSPECT_TOOLS = READONLY_TOOLS + ("Bash",)
+# Write stays available outside verify state: creating a new file is
+# legitimate work in any phase and has no read-first precondition.
+INSPECT_TOOLS = READONLY_TOOLS + ("Bash", "Write")
 EDIT_TOOLS = ("Edit", "MultiEdit")
 CREATE_TOOLS = ("Write", "Bash")
 VERIFY_TOOLS = ("Bash",) + READONLY_TOOLS
@@ -90,14 +96,17 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
         )
 
     latest = _latest_user_text(conv)
-    if _has_verify_intent(latest):
+    # Free-text intent only binds for short imperative instructions ("run
+    # tests"); long task briefs that mention verify/create as steps must not
+    # lock the session's tool surface (eval brick1-verify: multi-step 0/5).
+    if is_verify_instruction(latest):
         return ActionState("verify", VERIFY_TOOLS, requires_tool=True, required_tool="Bash", reason="verify_request")
-    if any(word in latest for word in CREATE_WORDS):
+    if len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS and any(word in latest for word in CREATE_WORDS):
         return ActionState("create_file", CREATE_TOOLS, requires_tool=True, reason="create_request")
     if not settings.pipeline.guard_edit_without_read:
-        return ActionState("edit_existing", EDIT_TOOLS + READONLY_TOOLS, reason="edit_guard_relaxed")
+        return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="edit_guard_relaxed")
     if _read_seen(conv):
-        return ActionState("edit_existing", EDIT_TOOLS + READONLY_TOOLS, reason="file_read")
+        return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="file_read")
     return ActionState("inspect", INSPECT_TOOLS, requires_tool=_has_inspect_intent(latest), reason="no_file_read")
 
 

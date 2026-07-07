@@ -272,6 +272,18 @@ def _has_verify_intent(text: str) -> bool:
     )
 
 
+# A short imperative like "run tests" is a verification instruction; a long
+# task brief that merely mentions verification as one of its steps is not.
+# Locking a whole session to verify-only tools because the brief said "and
+# verify" made tasks unfixable (eval brick1-verify: multi-step 0/5).
+SHORT_INSTRUCTION_MAX_CHARS = 64
+
+
+def is_verify_instruction(text: str) -> bool:
+    stripped = text.strip()
+    return len(stripped) <= SHORT_INSTRUCTION_MAX_CHARS and _has_verify_intent(stripped)
+
+
 def _verification_required(conv: Conversation, settings: Settings) -> bool:
     if has_unverified_edit(conv):
         return True
@@ -279,7 +291,7 @@ def _verification_required(conv: Conversation, settings: Settings) -> bool:
     if settings.planning.enabled and plan is not None and _is_verify_step(plan[2]):
         return True
     latest = _latest_user_text(conv)
-    return _has_verify_intent(latest)
+    return is_verify_instruction(latest)
 
 
 def _first_path_token(tokens: list[str]) -> str | None:
