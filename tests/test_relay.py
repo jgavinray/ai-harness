@@ -1079,3 +1079,15 @@ async def test_invalid_hidden_skill_forces_concrete_tool_retry(tmp_path):
     assert metrics["tool_surfaced_names"] == ["Skill"]
     assert "could not be validated by the harness" in str(fake.requests[1])
     assert "Your previous response still did not call a tool" in str(fake.requests[2])
+
+
+async def test_usage_accumulates_across_feedback_attempts():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("thinking out loud"), finish_chunk("stop")])
+    fake.push([tool_chunk("c1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    evs = await collect_events(fake)
+    done = evs[-1]
+    assert done.stop_reason == "tool_use"
+    # both attempts' usage chunks (10/5 each) are summed, not dropped
+    assert done.input_tokens == 20
+    assert done.output_tokens == 10

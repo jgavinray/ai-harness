@@ -248,6 +248,9 @@ async def run(
     constraint_tool_name: str | None = None
     skill_compiler = SkillCompiler(settings, profile.name)
     require_tool_after_invalid_skill = False
+    total_input = 0
+    total_output = 0
+    total_cached = 0
 
     model_name = getattr(backend, "model_name", settings.backend.model)
 
@@ -328,7 +331,7 @@ async def run(
                 if isinstance(ev, TextDelta) and detector.feed(ev.text):
                     m["degenerate_aborts"] += 1
                     yield TextDelta("\n[output truncated: repetition detected]")
-                    yield Done("end_turn")
+                    yield Done("end_turn", total_input, total_output, total_cached)
                     return
                 if isinstance(ev, ThinkingDelta) and settings.pipeline.reasoning == "strip":
                     continue
@@ -433,6 +436,9 @@ async def run(
                     })
                     yield TextDelta(f"\n[invalid tool call {ev.name}: {bad_error or error}]\n{raw[:500]}")
             else:  # Done
+                total_input += ev.input_tokens
+                total_output += ev.output_tokens
+                total_cached = max(total_cached, ev.cached_tokens)
                 if buffered_text and not emitted_valid_call and ev.stop_reason != "tool_use":
                     guarded_done = guard_done_claim(conv, "".join(buffered_text), settings)
                     if guarded_done is not None and attempts < settings.pipeline.repair_retries:
@@ -444,7 +450,7 @@ async def run(
                         yield TextDelta(text)
                 if not emitted_valid_call and ev.stop_reason == "tool_use":
                     # every call this turn failed validation and retries are gone
-                    yield Done("end_turn", ev.input_tokens, ev.output_tokens)
+                    yield Done("end_turn", total_input, total_output, total_cached)
                 else:
                     if (
                         require_tool_after_invalid_skill
@@ -454,7 +460,7 @@ async def run(
                     ):
                         tool_required_after_invalid_skill = True
                         break
-                    yield ev
+                    yield Done(ev.stop_reason, total_input, total_output, total_cached)
                 return
 
         if loop_call is not None:
@@ -529,7 +535,10 @@ async def run(
 
         if bad_call is None:
             # stream ended without a Done (backend quirk); close the turn
-            yield Done("tool_use" if emitted_valid_call else "end_turn")
+            yield Done(
+                "tool_use" if emitted_valid_call else "end_turn",
+                total_input, total_output, total_cached,
+            )
             return
 
         attempts += 1
