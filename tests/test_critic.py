@@ -4,8 +4,21 @@ import httpx
 
 from harness.config import PoolBackendCfg, RiskProfileCfg, Settings
 from harness.server import create_app
-from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
-from tests.test_server import EDIT_TOOL, READ_TOOL, request_body
+from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk, tool_chunk
+from tests.test_server import BASH_TOOL, EDIT_TOOL, READ_TOOL, request_body
+
+WRITE_TOOL = {
+    "name": "Write",
+    "description": "Writes a file",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["file_path", "content"],
+    },
+}
 
 
 def critic_body():
@@ -129,8 +142,9 @@ async def test_critic_approve_does_not_inject_feedback(tmp_path):
     assert sidecar["critic_action"] == "approve"
 
 
-async def test_agentic_os_mode_skips_local_critic_eligibility(tmp_path):
+async def test_agentic_os_mode_runs_enabled_local_critic(tmp_path):
     fake = FakeOpenAI()
+    fake.push([text_chunk("APPROVE"), finish_chunk("stop")])
     fake.push([text_chunk("continuing"), finish_chunk("stop")])
     s = settings(tmp_path)
     s.pipeline.policy_owner = "agentic_os"
@@ -143,10 +157,112 @@ async def test_agentic_os_mode_skips_local_critic_eligibility(tmp_path):
         stats = (await client.get("/stats")).json()
 
     assert resp.status_code == 200
-    assert len(fake.requests) == 1
-    assert fake.requests[0]["model"] == "m"
+    assert len(fake.requests) == 2
+    assert fake.requests[0]["model"] == "r"
+    assert fake.requests[1]["model"] == "m"
+    assert stats["critic"]["calls"] == 1
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    sidecar = next(r for r in rows if r.get("sidecar_type") == "critic")
+    assert sidecar["critic_policy_owner"] == "agentic_os"
+    assert sidecar["critic_forced"] is False
+
+
+async def test_critic_enabled_steers_runtime_preflight_failures_in_agentic_os(tmp_path):
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk(
+            "b1",
+            "Bash",
+            '{"command": "cat > /tmp/check_task.sh << \\"EOF\\"\\necho hi\\nEOF\\nbash /tmp/check_task.sh"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([
+        text_chunk("Use Write with file_path and content; do not create files with Bash heredocs."),
+        finish_chunk("stop"),
+    ])
+    fake.push([
+        tool_chunk(
+            "w1",
+            "Write",
+            '{"file_path": "/tmp/check_task.sh", "content": "echo hi"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    s = settings(tmp_path)
+    s.pipeline.policy_owner = "agentic_os"
+    s.review.enabled = False
+    s.critic.max_tokens = 32768
+    body = request_body(stream=False, tools=[WRITE_TOOL, BASH_TOOL])
+    body["messages"] = [{"role": "user", "content": "create check_task.sh"}]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(s, backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+        stats = (await client.get("/stats")).json()
+
+    assert resp.status_code == 200
+    assert [r["model"] for r in fake.requests] == ["m", "r", "m"]
+    assert fake.requests[1]["max_tokens"] == 32768
+    assert "Reviewer feedback" in json.dumps(fake.requests[2])
+    assert "Bash heredocs" in json.dumps(fake.requests[2])
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    sidecar = next(r for r in rows if r.get("sidecar_type") == "review")
+    assert sidecar["review_trigger"] == "use_write_tool"
+    assert sidecar["review_action"] == "revise"
+    assert sidecar["model"] == "r"
+    runtime_record = next(r for r in rows if r.get("kind") != "sidecar")
+    assert runtime_record["preflight_reasons"]["use_write_tool"] == 1
+    assert runtime_record["review_trigger"] == "use_write_tool"
     assert stats["critic"]["calls"] == 0
-    assert stats["runtime"]["critic_skips"]["external_policy_no_request"] == 1
+    assert stats["runtime"]["preflight_reasons"]["use_write_tool"] == 1
+
+
+async def test_runtime_review_max_tokens_fails_closed(tmp_path):
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk(
+            "b1",
+            "Bash",
+            '{"command": "cat > /tmp/check_task.sh << \\"EOF\\"\\necho hi\\nEOF"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    fake.push([finish_chunk("length")])
+    fake.push([
+        tool_chunk(
+            "w1",
+            "Write",
+            '{"file_path": "/tmp/check_task.sh", "content": "echo hi"}',
+        ),
+        finish_chunk("tool_calls"),
+    ])
+    s = settings(tmp_path)
+    s.pipeline.policy_owner = "agentic_os"
+    s.review.enabled = False
+    body = request_body(stream=False, tools=[WRITE_TOOL, BASH_TOOL])
+    body["messages"] = [{"role": "user", "content": "create check_task.sh"}]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(s, backend_client=backend_client)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 200
+    assert [r["model"] for r in fake.requests] == ["m", "r", "m"]
+    assert "Reviewer feedback" in json.dumps(fake.requests[2])
+    assert "hit its token limit" in json.dumps(fake.requests[2])
+    rows = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    sidecar = next(r for r in rows if r.get("sidecar_type") == "review")
+    assert sidecar["review_trigger"] == "use_write_tool"
+    assert sidecar["review_action"] == "inconclusive"
+    assert sidecar["review_inconclusive_reason"] == "max_tokens_without_feedback"
+    runtime_record = next(r for r in rows if r.get("kind") != "sidecar")
+    assert runtime_record["review_action"] == "inconclusive"
+    assert runtime_record["review_generated"] == 1
 
 
 async def test_agentic_os_mode_runs_critic_when_requested(tmp_path):

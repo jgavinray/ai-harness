@@ -13,7 +13,7 @@ from typing import Any
 from harness.config import Settings
 from harness.ir import Conversation, ToolDef
 
-NOISE_KEYS = ("$schema", "title", "additionalProperties")
+NOISE_KEYS = ("$schema", "title", "additionalProperties", "propertyNames")
 TOOL_DESC_MAX = 300
 PROP_DESC_MAX = 150
 
@@ -54,13 +54,14 @@ def _simplify(schema: Any) -> Any:
 
 class ToolSchemaStage:
     def apply(self, conv: Conversation, settings: Settings) -> Conversation:
-        tools = tuple(
-            ToolDef(
+        def simplify_tool(t: ToolDef) -> ToolDef:
+            return ToolDef(
                 t.name,
                 trim(t.description, TOOL_DESC_MAX),
                 _simplify(t.input_schema),
                 t.original_schema,
             )
-            for t in conv.tools
-        )
-        return replace(conv, tools=tools)
+
+        tools = tuple(simplify_tool(t) for t in conv.tools)
+        all_tools = tuple(simplify_tool(t) for t in conv.all_tools)
+        return replace(conv, tools=tools, all_tools=all_tools)

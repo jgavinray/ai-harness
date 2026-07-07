@@ -54,6 +54,22 @@ def test_constraints():
     assert l["json_schema"] == schema
 
 
+def test_vllm_constraint_schema_strips_unsupported_grammar_keys():
+    schema = {
+        "type": "object",
+        "propertyNames": {"pattern": "^[a-z]+$"},
+        "additionalProperties": False,
+        "properties": {"path": {"type": "string", "description": "drop", "pattern": "^/"}},
+        "required": ["path"],
+    }
+    out = VllmBackend.apply_constraint(None, {"model": "m"}, schema)["guided_json"]
+    assert out == {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+
+
 def test_factory():
     fake = FakeOpenAI()
     assert isinstance(make(fake, "vllm"), VllmBackend)

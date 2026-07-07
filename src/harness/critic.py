@@ -49,10 +49,6 @@ class CriticManager:
         if not self.cfg.enabled:
             return conv
         metrics["critic_policy_owner"] = "agentic_os" if external_policy else "harness"
-        if external_policy and not force:
-            metrics["critic_eligible"] = False
-            metrics["critic_skipped_reason"] = "external_policy_no_request"
-            return conv
         evidence = _evidence(conv, self.settings)
         if force and not evidence["triggers"]:
             evidence["triggers"] = ["external_policy"]

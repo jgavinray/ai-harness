@@ -15,6 +15,25 @@ import httpx
 from harness.backends.base import Backend, BackendError
 from harness.config import BackendCfg
 
+GRAMMAR_KEYS = {"type", "properties", "required", "items", "enum", "const", "anyOf"}
+
+
+def _vllm_grammar_schema(schema: Any) -> Any:
+    """Return the conservative JSON-schema subset vLLM guided JSON accepts."""
+    if isinstance(schema, list):
+        return [_vllm_grammar_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key not in GRAMMAR_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: _vllm_grammar_schema(prop) for name, prop in value.items()}
+        else:
+            out[key] = _vllm_grammar_schema(value)
+    return out
+
 
 class OpenAIBackend(Backend):
     async def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
@@ -40,7 +59,7 @@ class VllmBackend(OpenAIBackend):
     constrained = True
 
     def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
-        payload["guided_json"] = schema
+        payload["guided_json"] = _vllm_grammar_schema(schema)
         payload["tool_choice"] = "required"
         return payload
 

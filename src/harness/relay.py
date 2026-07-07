@@ -51,7 +51,18 @@ LOOP_THRESHOLD = 3
 LOOP_WINDOW_TURNS = 12
 
 
+def _loop_signature(call: ToolCall) -> tuple[str, str]:
+    arguments = call.arguments
+    if call.name == "Bash" and isinstance(arguments.get("command"), str):
+        arguments = {"command": arguments["command"].strip()}
+    return (
+        call.name,
+        json.dumps(arguments, sort_keys=True, separators=(",", ":")),
+    )
+
+
 def _repeat_count(conv: Conversation, call: ToolCall) -> int:
+    signature = _loop_signature(call)
     n = 0
     for turn in conv.turns[-LOOP_WINDOW_TURNS:]:
         if turn.role != "assistant":
@@ -59,8 +70,7 @@ def _repeat_count(conv: Conversation, call: ToolCall) -> int:
         for p in turn.parts:
             if (
                 isinstance(p, ToolCallPart)
-                and p.name == call.name
-                and p.arguments == call.arguments
+                and _loop_signature(ToolCall(p.id, p.name, p.arguments)) == signature
             ):
                 n += 1
     return n
@@ -465,7 +475,7 @@ async def run(
             attempts += 1
             guard, message = preflight_feedback
             suppress_text = True
-            conv = _append_preflight_feedback(conv, guard, message)
+            conv = _append_preflight_feedback(conv, guard, await reviewed(guard, message))
             continue
 
         if action_state_feedback is not None:

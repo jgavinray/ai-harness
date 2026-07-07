@@ -848,7 +848,7 @@ def create_app(
             events = _replay(cached_events)
         else:
             review_cb = None
-            if role == "main" and req_settings.review.enabled:
+            if role == "main" and (req_settings.review.enabled or req_settings.critic.enabled):
                 async def review_cb(trigger, review_conv, message, review_metrics):
                     return await reviewer.review(
                         trigger,

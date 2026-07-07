@@ -11,6 +11,21 @@ from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
 
+CRITIC_RUNTIME_TRIGGERS = {
+    "loop_break",
+    "missing_parent",
+    "missing_parent_next_action",
+    "use_write_tool",
+    "repeated_failing_call",
+    "use_read_tool",
+    "use_grep_tool",
+    "dangerous_command",
+    "non_verification_command",
+    "invalid_tool_retry",
+    "plan_drift",
+    "verify_after_edit",
+}
+
 
 class ReviewManager:
     def __init__(self, settings: Settings) -> None:
@@ -30,12 +45,19 @@ class ReviewManager:
         session_key: str | None = None,
         account_usage=None,
     ) -> str | None:
-        if not self.cfg.enabled or trigger not in self.cfg.triggers:
+        enabled = self.cfg.enabled or self.settings.critic.enabled
+        triggers = set(self.cfg.triggers)
+        if self.settings.critic.enabled:
+            triggers.update(CRITIC_RUNTIME_TRIGGERS)
+        if not enabled or trigger not in triggers:
             return None
         backend = _review_backend(pool)
         if backend is None:
             metrics["review_skipped_no_backend"] = 1
             return None
+        max_tokens = self.cfg.max_tokens
+        if self.settings.critic.enabled:
+            max_tokens = max(max_tokens, self.settings.critic.max_tokens)
         payload = {
             "model": backend.model_name,
             "messages": [
@@ -45,7 +67,7 @@ class ReviewManager:
                     "content": _review_prompt(trigger, conv, default_feedback, self.cfg.max_chars),
                 },
             ],
-            "max_tokens": self.cfg.max_tokens,
+            "max_tokens": max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -70,10 +92,13 @@ class ReviewManager:
             metrics["review_error"] = str(exc)
             return None
         feedback = _feedback(text)
+        inconclusive_reason = _inconclusive_reason(text, done)
         metrics["review_trigger"] = trigger
-        metrics["review_action"] = "revise" if feedback else "approve"
+        metrics["review_action"] = "revise" if feedback else ("inconclusive" if inconclusive_reason else "approve")
         metrics["review_reasoning_budget_sent"] = side_metrics.get("reasoning_budget_sent")
         metrics["review_reasoning_tokens_observed"] = HeuristicCounter().count_text(thinking) if thinking else 0
+        if inconclusive_reason:
+            metrics["review_inconclusive_reason"] = inconclusive_reason
         if account_usage:
             account_usage(backend, done, session_key, count_request=True, ttft_ms=ttft_ms)
         if logger:
@@ -87,6 +112,7 @@ class ReviewManager:
                 "role": "review",
                 "review_trigger": trigger,
                 "review_action": metrics["review_action"],
+                "review_inconclusive_reason": inconclusive_reason,
                 "wall_ms": int((time.monotonic() - start) * 1000),
                 "ttft_ms": ttft_ms,
                 "input_tokens": done.input_tokens,
@@ -96,6 +122,13 @@ class ReviewManager:
                 "reasoning_tokens_observed": metrics["review_reasoning_tokens_observed"],
                 **side_metrics,
             })
+        if not feedback and inconclusive_reason:
+            metrics["review_generated"] = metrics.get("review_generated", 0) + 1
+            return (
+                "The runtime critic hit its token limit without a usable decision. "
+                "Follow the deterministic guard feedback above exactly; do not repeat "
+                "the denied action."
+            )
         if not feedback:
             return None
         metrics["review_generated"] = metrics.get("review_generated", 0) + 1
@@ -103,7 +136,7 @@ class ReviewManager:
 
 
 def _review_backend(pool: BackendPool) -> PooledBackend | None:
-    candidates = pool.with_role("review") or pool.with_role("plan")
+    candidates = pool.with_role("review") or pool.with_role("critic") or pool.with_role("plan")
     if not candidates:
         return None
     return min(candidates, key=lambda b: (b.in_flight, b.requests))
@@ -149,3 +182,11 @@ def _feedback(text: str) -> str:
     if lowered.startswith("approve") or lowered.startswith("no-op") or lowered == "ok":
         return ""
     return cleaned[:600]
+
+
+def _inconclusive_reason(text: str, done: Done) -> str | None:
+    if done.stop_reason != "max_tokens":
+        return None
+    if _feedback(text):
+        return None
+    return "max_tokens_without_feedback"

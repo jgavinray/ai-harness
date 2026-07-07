@@ -9,6 +9,7 @@ SCHEMA = {
     "type": "object",
     "title": "ReadInput",
     "additionalProperties": False,
+    "propertyNames": {"pattern": "^[a-z_]+$"},
     "properties": {
         "file_path": {
             "type": "string",
@@ -33,11 +34,21 @@ def test_simplification():
     assert t.description.endswith(".")
     s = t.input_schema
     assert "$schema" not in s and "title" not in s and "additionalProperties" not in s
+    assert "propertyNames" not in s
     assert len(s["properties"]["file_path"]["description"]) <= 150
     # anyOf [X, null] flattened to X
     assert s["properties"]["limit"] == {"type": "number"}
     # original untouched
     assert t.original_schema is SCHEMA
+
+
+def test_all_tools_are_simplified_for_hidden_tool_surfacing():
+    conv = make_conv()
+    conv = Conversation(conv.system, conv.turns, (), conv.params, conv.tools)
+    out = ToolSchemaStage().apply(conv, Settings())
+    assert out.tools == ()
+    assert "propertyNames" not in out.all_tools[0].input_schema
+    assert out.all_tools[0].original_schema is SCHEMA
 
 
 def test_trim_sentence_boundary():
