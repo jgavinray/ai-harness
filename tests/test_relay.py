@@ -836,6 +836,38 @@ async def test_done_claim_after_edit_requires_verification():
     assert metrics["guard_fires"]["verify_after_edit"] == 1
 
 
+def test_running_project_script_counts_as_verification():
+    # eval regression (envelope-27b-rename-fix, 15/20 dead-ends): the task
+    # mandates verification via `python3 report.py`, which classified as
+    # "unknown" and was preflight-denied in verify state.
+    from harness.guards import classify_bash_command
+    assert classify_bash_command("python3 report.py") == "verify"
+    assert classify_bash_command("python3 /tmp/x/report.py") == "verify"
+    assert classify_bash_command("python -m mypkg.checks") == "verify"
+    assert classify_bash_command("node scripts/smoke.js") == "verify"
+    assert classify_bash_command("python3 --version") == "unknown"
+
+
+async def test_verify_state_accepts_project_script_run():
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "python3 report.py"}'),
+        finish_chunk("tool_calls"),
+    ])
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_after_unverified_edit(), get_profile("qwen"), backend, Settings(), metrics
+        )
+    ]
+    assert any(
+        isinstance(e, ToolCall) and e.arguments.get("command") == "python3 report.py"
+        for e in evs
+    )
+    assert metrics["preflight_denies"] == 0
+
+
 async def test_verify_state_denies_non_verification_bash():
     fake = FakeOpenAI()
     fake.push([

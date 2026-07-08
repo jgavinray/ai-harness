@@ -246,6 +246,12 @@ def classify_bash_command(command: str) -> str:
         "worktree",
     }:
         return "inspect"
+    # Running the project's own code IS verification: tasks routinely say
+    # "verify with `python3 report.py`", which no keyword list can enumerate.
+    if executable in {"python", "python2", "python3", "node"} and any(
+        t == "-m" or t.endswith((".py", ".js", ".mjs")) for t in tokens[1:]
+    ):
+        return "verify"
     return "unknown"
 
 
