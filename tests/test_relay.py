@@ -179,6 +179,25 @@ async def test_constrained_backend_gets_schema_on_retry():
     assert fake.requests[1]["guided_json"] == READ_SCHEMA
 
 
+async def test_stream_stall_ends_with_honest_failure():
+    settings = Settings()
+    settings.pipeline.stream_idle_timeout_s = 0.2
+    fake = FakeOpenAI()
+    fake.push([
+        text_chunk("thinking about it"),
+        {"_stall_ms": 1500},
+        text_chunk("never delivered"),
+    ])
+    backend = make(fake)
+    metrics: dict = {}
+    evs = [e async for e in run(conv_plain_task(), get_profile("qwen"), backend, settings, metrics=metrics)]
+    assert metrics["stream_stalls"] == 1
+    stall_texts = [e.text for e in evs if isinstance(e, TextDelta) and "[harness]" in e.text]
+    assert stall_texts and "stalled" in stall_texts[0]
+    assert not any(isinstance(e, TextDelta) and "never delivered" in e.text for e in evs)
+    assert evs[-1].stop_reason == "end_turn"
+
+
 async def test_first_attempt_constraint_is_opt_in():
     settings = Settings()
     settings.pipeline.first_attempt_constraints = True

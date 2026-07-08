@@ -4,11 +4,13 @@ Each entry in FakeOpenAI.scripts is consumed per request (last one repeats).
 A script is a list of chunk dicts streamed as SSE, or special entries:
   {"_status": 500}        → HTTP error response
   {"_die_midstream": True} → connection drops after prior chunks
+  {"_stall_ms": 800}       → stream emits nothing for this long
 Requests received are recorded in .requests for assertions.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import FastAPI, Request
@@ -64,10 +66,13 @@ class FakeOpenAI:
                 "usage": usage,
             })
 
-        def gen():
+        async def gen():
             for chunk in script:
                 if chunk.get("_die_midstream"):
                     raise RuntimeError("scripted mid-stream death")
+                if chunk.get("_stall_ms"):
+                    await asyncio.sleep(chunk["_stall_ms"] / 1000)
+                    continue
                 yield f"data: {json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
 

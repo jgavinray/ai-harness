@@ -9,6 +9,7 @@ Invariants:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from typing import AsyncIterator, Awaitable, Callable
@@ -164,6 +165,36 @@ def _append_give_up_feedback(conv: Conversation, allowed: list[str]) -> Conversa
     return replace(conv, turns=turns)
 
 
+# Sentinel yielded by _iter_with_idle_timeout when the backend stream goes
+# silent; the relay converts it into an honest failure instead of waiting
+# until the client's session timeout kills a zombie turn.
+_STALLED = object()
+
+
+async def _iter_with_idle_timeout(stream, timeout_s: float):
+    it = stream.__aiter__()
+    while True:
+        try:
+            if timeout_s:
+                ev = await asyncio.wait_for(it.__anext__(), timeout_s)
+            else:
+                ev = await it.__anext__()
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError:
+            yield _STALLED
+            return
+        yield ev
+
+
+def _stall_failure_text(timeout_s: float) -> str:
+    return (
+        f"\n[harness] Task step failed: the backend stream stalled (no output "
+        f"for {timeout_s:.0f}s) and the turn was ended honestly instead of "
+        "hanging. Nothing was applied silently; this step needs attention.\n"
+    )
+
+
 def _honest_failure_text(metrics: dict) -> str:
     events = metrics.get("invalid_tool_events") or []
     detail = ""
@@ -269,6 +300,7 @@ async def run(
     m.setdefault("first_attempt_constraints", 0)
     m.setdefault("contract_feedback", 0)
     m.setdefault("gave_up_honestly", 0)
+    m.setdefault("stream_stalls", 0)
     guard_metrics(m)
     attempts = 0
     suppress_text = False
@@ -351,6 +383,7 @@ async def run(
         invalid_skill: str | None = None
         tool_required_after_invalid_skill = False
         give_up_feedback = False
+        stalled = False
         buffered_text: list[str] = []
         buffer_text = (
             settings.pipeline.workflow_guards
@@ -361,7 +394,13 @@ async def run(
             )
         ) or effective_requires_tool
 
-        async for ev in profile.parse(backend.stream(payload)):
+        async for ev in _iter_with_idle_timeout(
+            profile.parse(backend.stream(payload)),
+            settings.pipeline.stream_idle_timeout_s,
+        ):
+            if ev is _STALLED:
+                stalled = True
+                break
             if isinstance(ev, (TextDelta, ThinkingDelta)):
                 if suppress_text:
                     continue
@@ -513,6 +552,12 @@ async def run(
                         return
                     yield Done(ev.stop_reason, total_input, total_output, total_cached)
                 return
+
+        if stalled:
+            m["stream_stalls"] += 1
+            yield TextDelta(_stall_failure_text(settings.pipeline.stream_idle_timeout_s))
+            yield Done("end_turn", total_input, total_output, total_cached)
+            return
 
         if loop_call is not None:
             attempts += 1
