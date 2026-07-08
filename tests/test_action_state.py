@@ -104,6 +104,37 @@ def test_short_inspect_instruction_still_requires_tool():
     assert state.requires_tool is True
 
 
+def _edit_turns(n: int):
+    turns = [Turn("user", (TextPart("rename calc_total to compute_total everywhere in this project"),)),
+             Turn("assistant", (ToolCallPart("r1", "Read", {"file_path": "/x/a.py"}),)),
+             Turn("user", (ToolResultPart("r1", "code"),))]
+    for i in range(n):
+        turns.append(Turn("assistant", (ToolCallPart(f"e{i}", "Edit", {
+            "file_path": "/x/a.py", "old_string": "a", "new_string": "b"}),)))
+        turns.append(Turn("user", (ToolResultPart(f"e{i}", "edited"),)))
+    return tuple(turns)
+
+
+def test_change_set_edits_allowed_below_unverified_limit():
+    # eval regression (envelope-27b-rename-fix2, 10/20): verify state bound
+    # after every single edit, so multi-spot renames could never finish —
+    # the third Edit of the change-set was denied.
+    conv = Conversation("sys", _edit_turns(2), _tools(), GenParams(max_tokens=512))
+    state = current_action_state(conv, Settings())
+    assert state.name == "edit_existing"
+    assert "Edit" in state.allowed_tools
+    assert "Bash" in state.allowed_tools  # voluntary mid-change-set verification
+
+
+def test_verify_binds_at_unverified_edit_limit():
+    settings = Settings()
+    settings.pipeline.unverified_edit_limit = 3
+    conv = Conversation("sys", _edit_turns(3), _tools(), GenParams(max_tokens=512))
+    state = current_action_state(conv, settings)
+    assert state.name == "verify"
+    assert "Edit" not in state.allowed_tools
+
+
 def test_effort_testing_text_does_not_force_verify():
     read = ToolDef("Read", "reads", {"type": "object"}, {"type": "object"})
     bash = ToolDef("Bash", "runs", {"type": "object"}, {"type": "object"})

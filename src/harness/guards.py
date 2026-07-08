@@ -525,19 +525,23 @@ def _read_files(conv: Conversation) -> set[str]:
 def is_verification_command(command: str) -> bool:
     return classify_bash_command(command) in {"build", "test", "verify"}
 
-def has_unverified_edit(conv: Conversation) -> bool:
-    edited = False
+def unverified_edit_count(conv: Conversation) -> int:
+    """Edit/Write calls since the last verification command."""
+    count = 0
     for turn in conv.turns:
         for part in turn.parts:
             if not isinstance(part, ToolCallPart):
                 continue
             if part.name in EDIT_TOOLS or part.name == "Write":
-                edited = True
+                count += 1
             elif part.name == "Bash" and is_verification_command(
                 str(part.arguments.get("command", ""))
             ):
-                edited = False
-    return edited
+                count = 0
+    return count
+
+def has_unverified_edit(conv: Conversation) -> bool:
+    return unverified_edit_count(conv) > 0
 
 def _done_claim(text: str) -> bool:
     lowered = text.lower()

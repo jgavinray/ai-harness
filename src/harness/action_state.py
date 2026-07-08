@@ -12,8 +12,8 @@ from dataclasses import dataclass, replace
 from harness.config import Settings
 from harness.guards import (
     SHORT_INSTRUCTION_MAX_CHARS,
-    has_unverified_edit,
     is_verify_instruction,
+    unverified_edit_count,
 )
 from harness.ir import Conversation, TextPart, ToolCallPart
 from harness.planning import plan_status
@@ -78,7 +78,11 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
         return ActionState("unrestricted", ())
 
     plan = plan_status(conv.system)
-    if has_unverified_edit(conv):
+    # Bind verify only after a whole change-set of unverified edits: renames
+    # and refactors need consecutive edits, and binding at the first edit made
+    # them impossible to finish. The done-claim gate still demands
+    # verification for any unverified edit.
+    if unverified_edit_count(conv) >= settings.pipeline.unverified_edit_limit:
         return ActionState(
             "verify",
             VERIFY_TOOLS,
@@ -104,9 +108,9 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
     if len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS and any(word in latest for word in CREATE_WORDS):
         return ActionState("create_file", CREATE_TOOLS, requires_tool=True, reason="create_request")
     if not settings.pipeline.guard_edit_without_read:
-        return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="edit_guard_relaxed")
+        return ActionState("edit_existing", EDIT_TOOLS + ("Write", "Bash") + READONLY_TOOLS, reason="edit_guard_relaxed")
     if _read_seen(conv):
-        return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="file_read")
+        return ActionState("edit_existing", EDIT_TOOLS + ("Write", "Bash") + READONLY_TOOLS, reason="file_read")
     requires_tool = (
         len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS
         and _has_inspect_intent(latest)

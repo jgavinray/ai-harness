@@ -50,6 +50,11 @@ class PipelineCfg(BaseModel):
     compact_at_ratio: float = 0.80
     compact_target_ratio: float = 0.50
     action_state_tools: bool = True
+    # Verify state binds after this many unverified edits, not after one:
+    # multi-spot change-sets (renames, refactors) need consecutive edits, and
+    # binding at 1 made them impossible to finish (envelope rename-refactor
+    # dead-ends). The done-claim gate still demands verification regardless.
+    unverified_edit_limit: int = 6
     # Apply schema constraints on the FIRST backend attempt when the action
     # state names a required tool. Default off: 2/2 live firings hung vLLM at
     # the thinking->tool-call transition (brick-1 verification, 2026-07-07).
