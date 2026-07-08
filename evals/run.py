@@ -58,6 +58,8 @@ def aggregate_log(log_path: Path) -> dict:
         "plan_drift": 0, "capability_fallbacks": 0, "wall_ms": 0,
         "research_briefs": 0, "skill_compiled": 0, "memory_tokens": 0,
         "review_generated": 0, "review_skipped_no_backend": 0,
+        "contract_feedback": 0, "gave_up_honestly": 0, "stream_stalls": 0,
+        "action_state_blocks": 0,
     }
     if not log_path.exists():
         return agg

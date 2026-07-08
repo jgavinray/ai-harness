@@ -99,6 +99,37 @@ def test_report_aggregation(tmp_path):
     assert "| m | full |" in md
 
 
+def test_per_task_envelope(tmp_path):
+    def row(task, **kw):
+        base = {"model": "m", "config": "full", "task": task, "success": False,
+                "timed_out": False, "input_tokens": 100, "output_tokens": 10,
+                "session_wall_s": 10}
+        base.update(kw)
+        return base
+
+    rows = (
+        [row("a", success=True) for _ in range(19)] + [row("a")]
+        + [row("b", success=True) for _ in range(4)]
+        + [row("b", input_tokens=0, output_tokens=0)]
+        + [row("c", timed_out=True), row("c", gave_up_honestly=1), row("c")]
+    )
+    p = tmp_path / "results.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in rows))
+    tasks = eval_report.aggregate_tasks(eval_report.load(p))
+    a = tasks[("m", "full", "a")]
+    assert a["trials"] == 20
+    assert a["verdict"] == "supported"
+    b = tasks[("m", "full", "b")]
+    assert b["verdict"] == "degraded"
+    assert b["failures"]["infra-death"] == 1
+    c = tasks[("m", "full", "c")]
+    assert c["verdict"] == "unsupported"
+    assert c["failures"] == {"timeout": 1, "honest-give-up": 1, "wrong-result": 1}
+    md = eval_report.markdown_tasks(tasks)
+    assert "supported" in md
+    assert "| a |" in md
+
+
 def test_all_tasks_complete_and_checkers_valid():
     names = {p.name for p in TASKS.iterdir()}
     assert names == {
