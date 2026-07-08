@@ -321,7 +321,12 @@ async def run(
             and len(payload_conv.tools) == 1
         ):
             required_tool = payload_conv.tools[0].name
-        if not attempts and backend.constrained and required_tool:
+        if (
+            not attempts
+            and backend.constrained
+            and required_tool
+            and settings.pipeline.first_attempt_constraints
+        ):
             required = next(
                 (t for t in conv.tools if t.name == required_tool),
                 None,

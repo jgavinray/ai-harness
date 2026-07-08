@@ -50,6 +50,16 @@ class PipelineCfg(BaseModel):
     compact_at_ratio: float = 0.80
     compact_target_ratio: float = 0.50
     action_state_tools: bool = True
+    # Apply schema constraints on the FIRST backend attempt when the action
+    # state names a required tool. Default off: 2/2 live firings hung vLLM at
+    # the thinking->tool-call transition (brick-1 verification, 2026-07-07).
+    # Re-enable only behind an eval delta. Repair retries stay constrained.
+    first_attempt_constraints: bool = False
+    # Abort a backend stream when no event arrives for this many seconds and
+    # end the turn as an honest [harness] failure instead of a zombie session.
+    # Must exceed worst-case re-prefill (measured 20-60 s at 60k tokens).
+    # 0 disables.
+    stream_idle_timeout_s: float = 120.0
     reasoning: str = "thinking"  # thinking | strip
     workflow_guards: bool = True
     guard_edit_without_read: bool = True

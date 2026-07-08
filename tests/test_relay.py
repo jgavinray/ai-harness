@@ -173,8 +173,23 @@ async def test_constrained_backend_gets_schema_on_retry():
     fake.push([tool_chunk("c2", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
     fake.push([finish_chunk("stop")])
     await collect_events(fake, kind="vllm")
-    assert fake.requests[0]["guided_json"] == READ_SCHEMA
+    # first attempt unconstrained by default (2/2 live firings hung vLLM at the
+    # thinking->tool-call transition; see brick-1 verification report)
+    assert "guided_json" not in fake.requests[0]
     assert fake.requests[1]["guided_json"] == READ_SCHEMA
+
+
+async def test_first_attempt_constraint_is_opt_in():
+    settings = Settings()
+    settings.pipeline.first_attempt_constraints = True
+    fake = FakeOpenAI()
+    fake.push([tool_chunk("c1", "Read", '{"file_path": "/x"}'), finish_chunk("tool_calls")])
+    backend = make(fake, "vllm")
+    metrics: dict = {}
+    evs = [e async for e in run(conv(), get_profile("qwen"), backend, settings, metrics=metrics)]
+    assert fake.requests[0]["guided_json"] == READ_SCHEMA
+    assert metrics["first_attempt_constraints"] == 1
+    assert any(isinstance(e, ToolCall) for e in evs)
 
 
 async def test_degenerate_stream_aborted():
