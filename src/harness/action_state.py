@@ -107,7 +107,11 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
         return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="edit_guard_relaxed")
     if _read_seen(conv):
         return ActionState("edit_existing", EDIT_TOOLS + ("Write",) + READONLY_TOOLS, reason="file_read")
-    return ActionState("inspect", INSPECT_TOOLS, requires_tool=_has_inspect_intent(latest), reason="no_file_read")
+    requires_tool = (
+        len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS
+        and _has_inspect_intent(latest)
+    )
+    return ActionState("inspect", INSPECT_TOOLS, requires_tool=requires_tool, reason="no_file_read")
 
 
 def shape_tools_for_state(conv: Conversation, state: ActionState) -> Conversation:

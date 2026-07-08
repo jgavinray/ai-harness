@@ -71,6 +71,39 @@ def test_long_brief_with_create_words_does_not_lock_create_state():
     assert "Read" in state.allowed_tools
 
 
+def test_question_brief_mentioning_read_does_not_require_tool():
+    # eval regression (envelope-27b, find-and-report 10/20): the task prompt
+    # contains "read" so inspect state required a tool every turn, making the
+    # demanded prose answer illegal — the give-up contract then replaced the
+    # model's correct answer with an honest failure.
+    prompt = (
+        "Where does this project read the WORKER_POOL_SIZE environment "
+        "variable? Reply with the file path and the line number in the "
+        "format path:line. Do not modify any files."
+    )
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart(prompt),)),),
+        _tools(),
+        GenParams(max_tokens=512),
+    )
+    state = current_action_state(conv, Settings())
+    assert state.name == "inspect"
+    assert state.requires_tool is False
+
+
+def test_short_inspect_instruction_still_requires_tool():
+    conv = Conversation(
+        "sys",
+        (Turn("user", (TextPart("read x"),)),),
+        _tools(),
+        GenParams(max_tokens=512),
+    )
+    state = current_action_state(conv, Settings())
+    assert state.name == "inspect"
+    assert state.requires_tool is True
+
+
 def test_effort_testing_text_does_not_force_verify():
     read = ToolDef("Read", "reads", {"type": "object"}, {"type": "object"})
     bash = ToolDef("Bash", "runs", {"type": "object"}, {"type": "object"})
