@@ -210,12 +210,21 @@ def _honest_failure_text(metrics: dict) -> str:
 
 def _append_action_state_feedback(conv: Conversation, state: str, allowed: list[str]) -> Conversation:
     choices = ", ".join(allowed) or "a valid tool"
-    turns = conv.turns + (
-        Turn("assistant", (TextPart(f"[runtime action state requires tool: {state}]"),)),
-        Turn("user", (TextPart(
+    if state == "verify":
+        message = (
+            f"The current runtime action state is {state!r}: you changed files and "
+            "the change is unverified. Call Bash now with the project's test or "
+            "check command (the one the task names, or the project's test runner). "
+            "Editing unlocks after that command runs."
+        )
+    else:
+        message = (
             f"The current runtime action state is {state!r}; do not answer in free text yet. "
             f"Call one of these tools now: {choices}."
-        ),)),
+        )
+    turns = conv.turns + (
+        Turn("assistant", (TextPart(f"[runtime action state requires tool: {state}]"),)),
+        Turn("user", (TextPart(message),)),
     )
     return replace(conv, turns=turns)
 

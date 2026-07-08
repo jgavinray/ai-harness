@@ -14,6 +14,33 @@ import jsonschema
 from harness.ir import ToolCall, ToolDef
 
 
+def _coerce_types(args: dict, schema: dict) -> dict:
+    """Fix the common small-model quirk of JSON scalars arriving as strings
+    ("false", "25") when the schema expects boolean/integer/number."""
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return args
+    out = dict(args)
+    for key, spec in props.items():
+        if key not in out or not isinstance(spec, dict) or not isinstance(out[key], str):
+            continue
+        expected = spec.get("type")
+        value = out[key].strip()
+        if expected == "boolean" and value.lower() in ("true", "false"):
+            out[key] = value.lower() == "true"
+        elif expected == "integer":
+            try:
+                out[key] = int(value)
+            except ValueError:
+                pass
+        elif expected == "number":
+            try:
+                out[key] = float(value) if "." in value else int(value)
+            except ValueError:
+                pass
+    return out
+
+
 def repair_toolcall(
     call: ToolCall, tools: tuple[ToolDef, ...]
 ) -> tuple[ToolCall | None, str | None]:
@@ -28,6 +55,8 @@ def repair_toolcall(
         if not isinstance(repaired, dict) or not repaired:
             return None, f"arguments are not a JSON object: {call.raw_arguments[:200]!r}"
         args = repaired
+    if isinstance(args, dict):
+        args = _coerce_types(args, tool.original_schema)
 
     try:
         jsonschema.validate(args, tool.original_schema)
