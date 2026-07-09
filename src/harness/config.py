@@ -190,6 +190,19 @@ class ResearchCfg(BaseModel):
     chunk_chars: int = 4000
 
 
+class FlywheelCfg(BaseModel):
+    enabled: bool = False
+    nightly_hour: int = 3  # local hour for the deterministic jobs
+    sentinel_weekday: int = 6  # 0=Mon .. 6=Sun; -1 disables the weekly envelope run
+    sentinel_trials: int = 20
+    retention_days: int = 90
+    corpus_path: str = "corpus/corpus.jsonl"
+    results_path: str = "evals/results/results.jsonl"  # eval tags for corpus gating
+    analytics_db: str = "logs/analytics.duckdb"
+    log_path: str = "logs/flywheel.jsonl"
+    sentinel_state_path: str = "logs/flywheel_sentinel.json"
+
+
 class CacheCfg(BaseModel):
     enabled: bool = True
     ttl_s: float = 600.0
@@ -216,6 +229,7 @@ class Settings(BaseModel):
     risk_profiles: list[RiskProfileCfg] = []
     skills: SkillsCfg = SkillsCfg()
     research: ResearchCfg = ResearchCfg()
+    flywheel: FlywheelCfg = FlywheelCfg()
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
