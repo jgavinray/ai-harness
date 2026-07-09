@@ -207,7 +207,10 @@ def _int_or_none(value) -> int | None:
 def _stats_state_path(requests_path: str | Path | None) -> Path | None:
     if not requests_path:
         return None
-    return Path(requests_path).with_name("stats_state.json")
+    p = Path(requests_path)
+    if p.is_dir():
+        return p / "stats_state.json"
+    return p.with_name("stats_state.json")
 
 
 def _load_stats_state(path: Path | None) -> dict:
@@ -275,6 +278,8 @@ def _update_vllm_totals(state: dict, backend: str, counters: dict[str, float]) -
 
 def _request_log_paths(path: str | Path) -> list[Path]:
     p = Path(path)
+    if p.is_dir():
+        return sorted(p.glob("*.jsonl"), key=lambda item: item.name)
     suffix = p.suffix
     stem = p.name[: -len(suffix)] if suffix else p.name
     rotated = sorted(p.parent.glob(f"{stem}-*{suffix}"), key=lambda item: item.name)
@@ -616,14 +621,15 @@ def create_app(
     router = Router(pool, settings)
     rcache = ResponseCache(settings.cache.ttl_s, settings.cache.max_entries)
     counter = HeuristicCounter()
-    logger = RequestLogger(settings.log.requests_path)
+    logger = RequestLogger(settings.log.requests_path, directory=settings.log.requests_dir)
     traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
+    log_source = settings.log.requests_dir or settings.log.requests_path
     planner = PlanningManager(settings)
     reviewer = ReviewManager(settings)
     critic = CriticManager(settings)
     research = ResearchManager(settings)
     pending_preflight: dict[tuple[str, str], dict] = {}
-    stats_state_path = _stats_state_path(settings.log.requests_path)
+    stats_state_path = _stats_state_path(log_source)
     stats_state = _load_stats_state(stats_state_path)
     stats_state_lock = asyncio.Lock()
 
@@ -646,8 +652,8 @@ def create_app(
     stats = {"requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
              "cached_tokens": 0, "critic": _empty_critic_stats(),
              "runtime": _empty_runtime_stats()}
-    if settings.log.requests_path:
-        _seed_stats(stats, pool, settings.log.requests_path)
+    if log_source:
+        _seed_stats(stats, pool, log_source)
 
     def account_usage(
         b,

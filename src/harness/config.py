@@ -88,7 +88,8 @@ class DebugCfg(BaseModel):
 
 
 class LogCfg(BaseModel):
-    requests_path: str | None = None  # JSONL per-request log; None = disabled
+    requests_path: str | None = None  # single-file JSONL log (eval runner, legacy)
+    requests_dir: str | None = None  # daily partitions <dir>/YYYY-MM-DD.jsonl; wins over requests_path
 
 
 class TracesCfg(BaseModel):
