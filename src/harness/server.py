@@ -276,6 +276,37 @@ def _update_vllm_totals(state: dict, backend: str, counters: dict[str, float]) -
     }
 
 
+def _flywheel_status(settings) -> dict:
+    """Latest record per flywheel job + sentinel state; best-effort, read-only."""
+    out: dict = {}
+    log_path = Path(settings.flywheel.log_path)
+    if log_path.exists():
+        jobs: dict[str, dict] = {}
+        try:
+            lines = log_path.read_text().splitlines()[-200:]
+            for line in lines:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                name = rec.get("job")
+                if name:
+                    jobs[name] = {k: rec.get(k) for k in ("ts", "rc", "duration_s")}
+        except OSError:
+            pass
+        if jobs:
+            out["jobs"] = jobs
+    sentinel_path = Path(settings.flywheel.sentinel_state_path)
+    if sentinel_path.exists():
+        try:
+            state = json.loads(sentinel_path.read_text())
+            out["sentinel"] = state
+            out["sentinel_degraded"] = bool(state.get("degraded"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return out
+
+
 def _request_log_paths(path: str | Path) -> list[Path]:
     p = Path(path)
     if p.is_dir():
@@ -1079,6 +1110,7 @@ def create_app(
             "critic": _critic_summary(stats["critic"]),
             "runtime": _runtime_summary(stats["runtime"]),
             "response_cache": {"hits": rcache.hits, "misses": rcache.misses},
+            "flywheel": _flywheel_status(settings),
         })
 
     return app
