@@ -53,11 +53,21 @@ def _facts(row: dict) -> tuple[str, list[str]]:
     return pkey, facts
 
 
+def _trace_lines(path: Path) -> list[str]:
+    """Accept a single sessions.jsonl or a partitioned trace directory."""
+    if path.is_dir():
+        lines: list[str] = []
+        for p in sorted(path.rglob("*.jsonl")):
+            lines.extend(p.read_text().splitlines())
+        return lines
+    return path.read_text().splitlines()
+
+
 def distill(trace_path: Path, settings: Settings) -> tuple[int, int]:
     manager = MemoryManager(settings, None)
     projects: dict[str, list[str]] = {}
     total = 0
-    for line in trace_path.read_text().splitlines():
+    for line in _trace_lines(trace_path):
         if not line.strip():
             continue
         total += 1

@@ -27,6 +27,8 @@ from harness.traces import assistant_message  # noqa: E402
 
 def successful_tags(results_path: Path) -> set[str]:
     tags = set()
+    if not results_path.exists():  # live-only corpus: no eval tags to admit
+        return tags
     for line in results_path.read_text().splitlines():
         row = json.loads(line)
         if row.get("success") and row.get("tag"):

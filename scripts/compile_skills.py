@@ -17,7 +17,7 @@ from harness.skills import SkillCompiler  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("skills", nargs="*")
-    ap.add_argument("--skills-dir", default="~/.codex/skills")
+    ap.add_argument("--skills-dir", default="~/.claude/skills")
     ap.add_argument("--cache-dir", default="~/.ai-harness/compiled-skills")
     ap.add_argument("--model-class", default="default")
     args = ap.parse_args()

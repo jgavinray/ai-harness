@@ -28,7 +28,8 @@ from configs import config_matrix, write_configs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
-PYTHON = str(ROOT / ".venv" / "bin" / "python")
+VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
+PYTHON = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
 
 def free_port() -> int:
