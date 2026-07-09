@@ -7,6 +7,16 @@ only evidence-backed changes. Do not guess. Do not promote a model, relax a
 scaffold, or change routing because it "seems better." Make the same task set
 prove it.
 
+> **Automation status (2026-07-09):** the flywheel compose service now runs
+> parts of this loop unattended — nightly memory distill, gated corpus
+> rebuild, retention, and DuckDB refresh; weekly the envelope sentinel
+> (Step 2/3 equivalents) with verdicts in `logs/flywheel_sentinel.json` and
+> `/stats`. This runbook remains the manual/diagnostic path: use it when the
+> sentinel flags a degraded family, when validating a candidate, or when the
+> flywheel itself misbehaves (`logs/flywheel.jsonl` is its record). Verdicts
+> now come from `evals/report.py`'s per-task envelope table
+> (supported ≥0.95 / degraded ≥0.80 / unsupported, n=20).
+
 ## Ground Rules
 
 - Keep user-facing traffic on the current live backends unless a candidate passes

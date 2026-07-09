@@ -133,17 +133,19 @@ a `Conversation` and returns a new `Conversation`.
 
 Current stages run in this order:
 
-1. `SystemPromptStage`: replaces or compresses Claude Code's system prompt.
+1. `PathCanonStage`: rewrites configured known-bad path prefixes
+   (`pipeline.path_aliases`, empty by default) everywhere in the prompt.
+2. `SystemPromptStage`: replaces or compresses Claude Code's system prompt.
    Recognized Claude Code prompts are rebuilt as a smaller agent contract plus
    selected project context sections.
-2. `ToolPruneStage`: limits visible tools to recent tools, core Claude Code
+3. `ToolPruneStage`: limits visible tools to recent tools, core Claude Code
    tools, and then any remaining tools up to `max_tools`.
-3. `ToolSchemaStage`: trims verbose descriptions and removes schema noise while
+4. `ToolSchemaStage`: trims verbose descriptions and removes schema noise while
    preserving `original_schema` for validation.
-4. `HistoryStage`: enforces context budget by truncating old tool results first
+5. `HistoryStage`: enforces context budget by truncating old tool results first
    and evicting old turn groups second. Recent turns are protected.
-5. `FewshotStage`: appends concrete tool-use examples to the system prompt.
-6. `MemoryStage`: optionally injects durable project facts from prior sessions.
+6. `FewshotStage`: appends concrete tool-use examples to the system prompt.
+7. `MemoryStage`: optionally injects durable project facts from prior sessions.
 
 Pipeline stages should be deterministic. Rewriting old context differently on
 every request hurts backend prefix caching.
@@ -205,9 +207,35 @@ The relay loop:
   them;
 - always terminates the stream with `Done`.
 
-`src/harness/repair/toolcalls.py` is the validation and JSON-repair layer.
+`src/harness/repair/toolcalls.py` is the validation and JSON-repair layer
+(including coercion of string scalars like `"false"` to schema types).
 `src/harness/repair/degenerate.py` is a small repetition detector for runaway
 streams.
+
+### The turn contract
+
+The relay is a closed-loop controller, not a pass-through (spec:
+`docs/superpowers/specs/2026-07-07-daily-driver-consistency-design.md`):
+
+- `action_state.py` computes which tool surface is legal for the next call.
+  Free-text intent (verify/create/inspect words in the latest user text) only
+  binds for short imperative instructions; long task briefs never lock the
+  surface. The verify state binds after `pipeline.unverified_edit_limit`
+  unverified edits — change-sets may edit consecutively, and the done-claim
+  guard still demands verification for any unverified edit.
+- `guards.py` preflights tool calls deterministically (dangerous commands,
+  shell file creation, verification-required Bash — running the project's own
+  script counts as verification) and owns the done-claim gate.
+- A turn whose latest feedback demanded a tool retry cannot end as a
+  prose-only/empty `end_turn`: it is fed back (`contract_feedback` metric,
+  guard `give_up`), and an exhausted budget emits an explicit `[harness]`
+  failure with `gave_up_honestly=1` — never a silent empty turn.
+- A backend stream with no event for `pipeline.stream_idle_timeout_s` ends
+  the turn honestly (`stream_stalls` metric) instead of hanging.
+- Usage accumulates across retry attempts; every terminal `Done` carries real
+  totals.
+- First-attempt schema constraints are gated off by default
+  (`pipeline.first_attempt_constraints`); repair retries stay constrained.
 
 When debugging bad tool behavior, inspect this sequence:
 
@@ -223,13 +251,20 @@ When debugging bad tool behavior, inspect this sequence:
 selected roles. The cache key is the rendered backend payload with stream flags
 removed. Hits replay previously collected IR events.
 
-`src/harness/log.py` writes one compact JSONL record per request when
-`[log] requests_path` is configured. On startup, `server.py` can replay this log
-to rehydrate aggregate stats.
+`src/harness/log.py` writes one compact JSONL record per request. Two modes:
+a single file (`[log] requests_path` — eval runner, legacy) or daily
+partitions (`[log] requests_dir` → `logs/requests/YYYY-MM-DD.jsonl` — the
+live data plane). On startup, `server.py` replays the log (globbing
+partitions) to rehydrate aggregate stats.
 
 `src/harness/traces.py` records rendered payloads, IR events, and metrics for
-evaluation and corpus generation. The eval runner can tag traces with
-`HARNESS_TRACE_TAG`.
+evaluation and corpus generation. Layouts mirror the log: `sessions` (one
+sessions.jsonl) or `partitioned` (`traces/YYYY-MM-DD/<session>.jsonl`). The
+eval runner tags traces with `HARNESS_TRACE_TAG`.
+
+`scripts/analytics.py` builds a disposable DuckDB index (`requests` and
+`trace_records` views) over all of the above; the JSONL stays the source of
+truth and deleting the .duckdb file is always safe.
 
 `src/harness/memory.py` implements the optional project memory layer. It records
 session tails, waits until a session is idle, asks a fast backend to extract
@@ -237,6 +272,22 @@ durable project facts, and injects those facts into future sessions for the
 same project.
 
 These systems are best-effort. They should never break the serving path.
+
+## Flywheel (self-improvement loops)
+
+`src/harness/flywheel.py` is a second compose service (same image, command
+`python -m harness.flywheel`). Nightly it runs the deterministic jobs as
+subprocesses of `scripts/`: memory distill, gated corpus rebuild
+(`corpus/corpus.jsonl`), partition retention, DuckDB refresh, and skill
+compilation. Weekly it runs the envelope sentinel — the full eval suite via
+the bundled `claude` CLI — and writes per-family verdicts to
+`logs/flywheel_sentinel.json`; any family below "supported" flips
+`sentinel_degraded` in `/stats`. Every job run appends one record to
+`logs/flywheel.jsonl`. Manual cycles:
+`docker compose exec flywheel python -m harness.flywheel --config
+/config/harness.toml --once nightly|sentinel [--trials N]`.
+A job failure never touches serving; the only shared surface is the
+data-plane volumes.
 
 ## Metrics And Dashboard
 
@@ -294,6 +345,14 @@ Run all tests with:
   update `tests/test_pool_router.py`.
 - **Add a new operational metric**: record it in `server.py`, include it in
   `/stats`, and update dashboard/tests that assert the stats shape.
+- **Change turn-contract behavior**: edit `relay.py`/`action_state.py`/
+  `guards.py` with a test reproducing the failing eval trace, then re-run the
+  affected eval families (`evals/run.py --tasks …`) before claiming the fix.
+- **Add an eval task family**: create `evals/tasks/<name>/`
+  (`prompt.txt`, `check.sh`, `repo_template/`); the initial repo state must
+  FAIL `check.sh` (asserted by `tests/test_evals.py`).
+- **Add a flywheel job**: extend `nightly_jobs()` in `flywheel.py` (argv of a
+  `scripts/` subprocess) and cover it in `tests/test_flywheel.py`.
 
 ## Development Rules Of Thumb
 
