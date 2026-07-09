@@ -89,3 +89,8 @@ roles = ["fast"]
 
 [log]
 requests_dir = "logs/requests"   # daily partitions; legacy logs/requests.jsonl* still rehydrate stats via analytics/globbing
+
+[flywheel]
+enabled = true
+# nightly deterministic jobs at 03:00 local; envelope sentinel Sundays.
+# Jobs run in the flywheel compose service; serving never executes them.

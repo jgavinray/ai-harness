@@ -11,7 +11,7 @@ services:
       - ./harness.toml:/config/harness.toml:ro
       - ./logs:/app/logs
       - ./traces:/app/traces
-      - harness-memory:/root/.ai-harness
+      - harness-memory:/home/harness/.ai-harness
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -20,6 +20,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  flywheel:
+    image: ai-harness:local
+    container_name: ai-harness-flywheel
+    restart: unless-stopped
+    command: ["python", "-m", "harness.flywheel", "--config", "/config/harness.toml"]
+    volumes:
+      - ./harness.toml:/config/harness.toml:ro
+      - ./logs:/app/logs
+      - ./traces:/app/traces
+      - ./corpus:/app/corpus
+      - ./evals/results:/app/evals/results
+      - harness-memory:/home/harness/.ai-harness
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ai-harness:
+        condition: service_started
 
 volumes:
   harness-memory:

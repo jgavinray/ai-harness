@@ -8,7 +8,7 @@ __pycache__
 debug_dumps
 logs
 traces
-evals
 tests
 docs
 harness.toml
+evals/results
