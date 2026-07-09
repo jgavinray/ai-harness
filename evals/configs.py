@@ -57,7 +57,7 @@ def render(
         "",
         "[skills]",
         f"enabled = {str(overrides.get('skills', True)).lower()}",
-        'dir = "~/.codex/skills"',
+        'dir = "~/.claude/skills"',
         f'cache_dir = "{state / "compiled-skills"}"',
         "",
         "[research]",
