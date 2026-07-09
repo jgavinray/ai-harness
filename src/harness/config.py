@@ -176,7 +176,7 @@ class RiskProfileCfg(BaseModel):
 
 class SkillsCfg(BaseModel):
     enabled: bool = False
-    dir: str = "~/.codex/skills"
+    dir: str = "~/.claude/skills"
     cache_dir: str = "~/.ai-harness/compiled-skills"
     max_tokens: int = 400
 
