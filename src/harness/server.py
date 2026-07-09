@@ -622,7 +622,10 @@ def create_app(
     rcache = ResponseCache(settings.cache.ttl_s, settings.cache.max_entries)
     counter = HeuristicCounter()
     logger = RequestLogger(settings.log.requests_path, directory=settings.log.requests_dir)
-    traces = TraceStore(settings.traces.dir if settings.traces.enabled else None)
+    traces = TraceStore(
+        settings.traces.dir if settings.traces.enabled else None,
+        layout=settings.traces.layout,
+    )
     log_source = settings.log.requests_dir or settings.log.requests_path
     planner = PlanningManager(settings)
     reviewer = ReviewManager(settings)

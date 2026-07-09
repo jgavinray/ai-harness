@@ -51,19 +51,40 @@ def assistant_message(events: list[dict]) -> dict:
 
 
 class TraceStore:
+    """Two layouts: "sessions" (one sessions.jsonl — eval runner, legacy) or
+    "partitioned" (<dir>/YYYY-MM-DD/<session_key[:16]>.jsonl — the data-plane
+    layout the flywheel jobs and DuckDB index consume)."""
+
     def __init__(
         self,
         directory: str | Path | None,
         tag: str | None = None,
         rotate_bytes: int = DEFAULT_ROTATE_BYTES,
+        layout: str = "sessions",
     ) -> None:
-        self.path = Path(directory) / "sessions.jsonl" if directory else None
+        self.directory = Path(directory) if directory else None
+        self.layout = layout
+        self.path = (
+            self.directory / "sessions.jsonl"
+            if self.directory and layout == "sessions"
+            else None
+        )
         self.tag = tag if tag is not None else os.environ.get("HARNESS_TRACE_TAG", "")
         self.rotate_bytes = rotate_bytes
         self._lock = threading.Lock()
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             rotate_if_needed(self.path, self.rotate_bytes)
+        elif self.directory:
+            self.directory.mkdir(parents=True, exist_ok=True)
+
+    def _target(self, session_key: str) -> Path | None:
+        if self.path is not None:
+            return self.path
+        if self.directory is None:
+            return None
+        name = (session_key or "untagged")[:16]
+        return self.directory / time.strftime("%Y-%m-%d") / f"{name}.jsonl"
 
     def append(
         self,
@@ -73,7 +94,8 @@ class TraceStore:
         events: list[IREvent],
         metrics: dict,
     ) -> None:
-        if not self.path:
+        target = self._target(session_key)
+        if target is None:
             return
         line = json.dumps(
             {
@@ -88,6 +110,7 @@ class TraceStore:
             separators=(",", ":"),
         )
         with self._lock:
-            rotate_if_needed(self.path, self.rotate_bytes)
-            with self.path.open("a") as f:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            rotate_if_needed(target, self.rotate_bytes)
+            with target.open("a") as f:
                 f.write(line + "\n")

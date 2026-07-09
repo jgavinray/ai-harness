@@ -37,6 +37,16 @@ def successful_tags(results_path: Path) -> set[str]:
 LOOP_THRESHOLD = 3  # mirrors harness.relay: identical calls at/over this = loop
 
 
+def _trace_lines(path: Path) -> list[str]:
+    """Accept a single sessions.jsonl or a partitioned trace directory."""
+    if path.is_dir():
+        lines: list[str] = []
+        for p in sorted(path.rglob("*.jsonl")):
+            lines.extend(p.read_text().splitlines())
+        return lines
+    return path.read_text().splitlines()
+
+
 def _conversation_id(trace: dict) -> str:
     """Stable per-conversation grouping key: the first user message of the
     rendered payload (session_key in older trace rows varied per request)."""
@@ -84,7 +94,7 @@ def build(
     include_live: bool = False,
 ) -> tuple[int, int]:
     keep_tags = successful_tags(results_path)
-    rows = [json.loads(line) for line in traces_path.read_text().splitlines()]
+    rows = [json.loads(line) for line in _trace_lines(traces_path)]
     loopy = _loopy_conversations(rows) if include_live else set()
     kept = total = 0
     with out_path.open("w") as out:

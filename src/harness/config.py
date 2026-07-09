@@ -95,6 +95,7 @@ class LogCfg(BaseModel):
 class TracesCfg(BaseModel):
     enabled: bool = False
     dir: str = "traces"
+    layout: Literal["sessions", "partitioned"] = "sessions"
 
 
 class MemoryCfg(BaseModel):

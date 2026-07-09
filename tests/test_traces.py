@@ -53,6 +53,37 @@ def test_trace_store_rotates_existing_oversized_file(tmp_path):
     assert rec["events"][0]["t"] == "done"
 
 
+def test_trace_store_partitioned_layout(tmp_path):
+    import time as _time
+    store = TraceStore(tmp_path, tag="", layout="partitioned")
+    store.append("abcdef0123456789deadbeef", "req1", {"messages": []}, [TextDelta("x")], {})
+    day = _time.strftime("%Y-%m-%d")
+    f = tmp_path / day / "abcdef0123456789.jsonl"
+    assert f.exists()
+    rec = json.loads(f.read_text())
+    assert rec["session_key"] == "abcdef0123456789deadbeef"
+
+
+def test_corpus_reads_trace_directory(tmp_path):
+    day = tmp_path / "traces" / "2026-07-09"
+    day.mkdir(parents=True)
+    trace = {
+        "tag": "m-full-fix-test-0",
+        "session_key": "s1",
+        "payload": {"messages": [{"role": "user", "content": "hi"}]},
+        "events": [{"t": "text", "text": "ok"}, {"t": "done", "stop_reason": "end_turn",
+                    "input_tokens": 1, "output_tokens": 1, "cached_tokens": 0}],
+        "metrics": {"retries": 0, "invalid_calls": 0, "degenerate_aborts": 0},
+    }
+    (day / "s1.jsonl").write_text(json.dumps(trace) + "\n")
+    results = tmp_path / "results.jsonl"
+    results.write_text(json.dumps({"tag": "m-full-fix-test-0", "success": True}) + "\n")
+    out = tmp_path / "corpus.jsonl"
+    kept, total = corpus.build(tmp_path / "traces", results, out)
+    assert (kept, total) == (1, 1)
+    assert json.loads(out.read_text())["messages"][-1]["role"] == "assistant"
+
+
 async def test_server_writes_traces(tmp_path):
     settings = Settings()
     settings.backend.base_url = "http://fake/v1"
