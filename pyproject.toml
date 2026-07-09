@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+analytics = ["duckdb>=1.0"]  # derived index only; serving code never imports it
 
 [build-system]
 requires = ["hatchling"]
