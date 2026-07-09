@@ -11,6 +11,7 @@ services:
       - ./harness.toml:/config/harness.toml:ro
       - ./logs:/app/logs
       - ./traces:/app/traces
+      - harness-memory:/root/.ai-harness
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -19,3 +20,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  harness-memory:

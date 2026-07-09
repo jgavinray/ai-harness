@@ -47,6 +47,7 @@ dump_prompts = false
 
 [traces]
 enabled = true
+layout = "partitioned"   # traces/YYYY-MM-DD/<session>.jsonl (data plane)
 
 [pipeline]
 # The certified runs used harness-owned policy (eval default), not agentic_os.
@@ -87,4 +88,4 @@ ttl_s = 600
 roles = ["fast"]
 
 [log]
-requests_path = "logs/requests.jsonl"
+requests_dir = "logs/requests"   # daily partitions; legacy logs/requests.jsonl* still rehydrate stats via analytics/globbing

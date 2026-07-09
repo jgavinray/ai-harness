@@ -8,3 +8,4 @@ evals/results/
 evals/generated/
 traces/
 corpus.jsonl
+harness.duckdb

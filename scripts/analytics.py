@@ -41,7 +41,7 @@ def refresh(db_path: Path, logs: Path, traces: Path):
         for p in [*logs.glob("requests.jsonl*"), *(logs / "requests").glob("*.jsonl")]
     )
     trace_files = sorted(
-        str(p) for p in [*traces.glob("sessions.jsonl*"), *traces.glob("*/*.jsonl")]
+        str(p) for p in [*traces.glob("sessions*.jsonl"), *traces.glob("*/*.jsonl")]
     )
     _view(con, "requests", request_files, "*")
     # payload/events are heavy; the index keeps the queryable envelope and
