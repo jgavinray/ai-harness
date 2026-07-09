@@ -8,8 +8,9 @@ services:
     ports:
       - "8484:8484"
     volumes:
-      - ./docker/harness.toml:/config/harness.toml:ro
+      - ./harness.toml:/config/harness.toml:ro
       - ./logs:/app/logs
+      - ./traces:/app/traces
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
