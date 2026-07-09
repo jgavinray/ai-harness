@@ -54,10 +54,6 @@ DANGEROUS_PATTERNS = (
     r"\bchmod\s+-R\s+777\b",
     r":\(\)\s*\{",
 )
-BAD_DEV_PR_PREFIX = "/Users/jgavinray/dev-pr"
-GOOD_DEV_PR_PREFIX = "/Users/jgavinray/dev/pr"
-
-
 @dataclass(frozen=True)
 class PreflightDecision:
     decision: str
@@ -86,15 +82,19 @@ def _file_arg(call: ToolCall | ToolCallPart) -> str:
     value = call.arguments.get("file_path") or call.arguments.get("path") or ""
     return str(value)
 
-def normalize_confused_paths(call: ToolCall) -> tuple[ToolCall, bool]:
-    """Fix the observed dev-pr/dev/pr path confusion before tool execution."""
+def normalize_confused_paths(call: ToolCall, aliases: list[list[str]]) -> tuple[ToolCall, bool]:
+    """Rewrite configured known-bad path prefixes before tool execution."""
     changed = False
     args = dict(call.arguments)
     for key in ("file_path", "path", "command"):
         value = args.get(key)
-        if isinstance(value, str) and BAD_DEV_PR_PREFIX in value:
-            args[key] = value.replace(BAD_DEV_PR_PREFIX, GOOD_DEV_PR_PREFIX)
-            changed = True
+        if not isinstance(value, str):
+            continue
+        for bad, good in aliases:
+            if bad in value:
+                value = value.replace(bad, good)
+                changed = True
+        args[key] = value
     if not changed:
         return call, False
     return ToolCall(call.id, call.name, args, call.raw_arguments), True
@@ -384,7 +384,7 @@ def preflight_tool_call(
     # disk and deadlock Write behind an unsatisfiable missing_parent.
     colocated = settings.pipeline.client_colocated
 
-    rewritten, path_rewritten = normalize_confused_paths(call)
+    rewritten, path_rewritten = normalize_confused_paths(call, settings.pipeline.path_aliases)
     if path_rewritten:
         return PreflightDecision(
             "rewrite",

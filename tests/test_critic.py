@@ -48,6 +48,7 @@ def settings(tmp_path=None):
     s = Settings()
     s.critic.enabled = True
     s.reasoning_budget.enabled = True
+    s.pipeline.path_aliases = [["/work/old-root", "/work/new-root"]]
     if tmp_path:
         s.log.requests_path = str(tmp_path / "requests.jsonl")
     s.risk_profiles = [
@@ -345,7 +346,7 @@ async def test_critic_skips_deterministic_path_alias(tmp_path):
                 "id": "r1",
                 "type": "tool_use",
                 "name": "Read",
-                "input": {"file_path": "/Users/jgavinray/dev-pr/src/main.c"},
+                "input": {"file_path": "/work/old-root/src/main.c"},
             }],
         },
         {
@@ -354,7 +355,7 @@ async def test_critic_skips_deterministic_path_alias(tmp_path):
                 "type": "tool_result",
                 "tool_use_id": "r1",
                 "is_error": True,
-                "content": "No such file or directory: /Users/jgavinray/dev-pr/src/main.c",
+                "content": "No such file or directory: /work/old-root/src/main.c",
             }],
         },
     ]

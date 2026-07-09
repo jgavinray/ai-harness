@@ -81,23 +81,25 @@ async def test_happy_path():
     assert len(fake.requests) == 1
 
 
-async def test_dev_pr_path_confusion_is_rewritten_before_tool_call():
+async def test_configured_path_alias_is_rewritten_before_tool_call():
+    settings = Settings()
+    settings.pipeline.path_aliases = [["/work/old-root", "/work/new-root"]]
     fake = FakeOpenAI()
     fake.push([
-        tool_chunk("c1", "Read", '{"file_path": "/Users/jgavinray/dev-pr/src/main.c"}'),
+        tool_chunk("c1", "Read", '{"file_path": "/work/old-root/src/main.c"}'),
         finish_chunk("tool_calls"),
     ])
     metrics = {}
     backend = make(fake)
-    evs = [e async for e in run(conv(), get_profile("qwen"), backend, Settings(), metrics=metrics)]
+    evs = [e async for e in run(conv(), get_profile("qwen"), backend, settings, metrics=metrics)]
     call = next(e for e in evs if isinstance(e, ToolCall))
-    assert call.arguments["file_path"] == "/Users/jgavinray/dev/pr/src/main.c"
+    assert call.arguments["file_path"] == "/work/new-root/src/main.c"
     assert metrics["path_rewrites"] == 1
     assert metrics["path_rewrite_names"] == ["Read"]
     assert metrics["preflight_rewrites"] == 1
     assert metrics["preflight_reason"] == "path_alias"
     assert metrics["preflight_events"][0]["original_arguments"]["file_path"].startswith(
-        "/Users/jgavinray/dev-pr"
+        "/work/old-root"
     )
 
 

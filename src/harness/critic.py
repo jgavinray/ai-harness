@@ -19,7 +19,6 @@ from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, T
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
-from harness.guards import BAD_DEV_PR_PREFIX, GOOD_DEV_PR_PREFIX
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 BUILD_WORDS = ("gcc", "clang", "make", "cmake", "ninja", "ld ", "undefined reference")
@@ -59,7 +58,9 @@ class CriticManager:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = "no_triggers"
             return conv
-        deterministic_skip = None if force else _deterministic_skip_reason(evidence, metrics)
+        deterministic_skip = None if force else _deterministic_skip_reason(
+            evidence, metrics, self.settings.pipeline.path_aliases
+        )
         if deterministic_skip:
             metrics["critic_eligible"] = False
             metrics["critic_skipped_reason"] = deterministic_skip
@@ -221,7 +222,11 @@ def _fingerprint(evidence: dict) -> str:
     return hashlib.sha1(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
 
 
-def _deterministic_skip_reason(evidence: dict, metrics: dict | None = None) -> str | None:
+def _deterministic_skip_reason(
+    evidence: dict,
+    metrics: dict | None = None,
+    aliases: list[list[str]] | tuple = (),
+) -> str | None:
     text = "\n".join(
         (evidence.get("paths") or [])
         + (evidence.get("recent_results") or [])
@@ -233,10 +238,10 @@ def _deterministic_skip_reason(evidence: dict, metrics: dict | None = None) -> s
         return None
     if metrics and metrics.get("path_canonicalized"):
         return "path_alias"
-    if BAD_DEV_PR_PREFIX.lower() in text or (
-        "dev-pr" in text and GOOD_DEV_PR_PREFIX.lower() not in text
-    ):
-        return "path_alias"
+    for bad, good in aliases:
+        bad_name = bad.rsplit("/", 1)[-1].lower()
+        if bad.lower() in text or (bad_name in text and good.lower() not in text):
+            return "path_alias"
     if "grep" in text and "regular expression" in text and "invalid" in text:
         return "grep_syntax"
     if "no such file or directory" in text and ("mkdir" in text or "parent" in text):
@@ -304,7 +309,7 @@ def _feedback_tags(feedback: str) -> list[str]:
     text = feedback.lower()
     tags = []
     checks = [
-        ("path_error", ("path", "directory", "dev-pr", "dev/pr", "does not exist", "non-existent")),
+        ("path_error", ("path", "directory", "does not exist", "non-existent")),
         ("build_error", ("build", "link", "undefined reference", "compile", "gcc", "make")),
         ("test_error", ("test", "pytest", "failure", "failed", "assert")),
         ("missing_directory", ("mkdir", "directory does not exist", "missing directory", "create directory")),

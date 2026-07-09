@@ -64,8 +64,10 @@ def request_body(stream: bool = True, system=None, tools=None) -> dict:
     }
 
 
-def make_client(fake: FakeOpenAI) -> httpx.AsyncClient:
+def make_client(fake: FakeOpenAI, path_aliases: list[list[str]] | None = None) -> httpx.AsyncClient:
     settings = Settings()
+    if path_aliases:
+        settings.pipeline.path_aliases = path_aliases
     backend_client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
     )
@@ -273,12 +275,12 @@ async def test_stats():
 async def test_stats_records_preflight_success_outcome():
     fake = FakeOpenAI()
     fake.push([
-        tool_chunk("c1", "Read", '{"file_path": "/Users/jgavinray/dev-pr/src/main.c"}'),
+        tool_chunk("c1", "Read", '{"file_path": "/work/old-root/src/main.c"}'),
         finish_chunk("tool_calls"),
     ])
     fake.push([text_chunk("done"), finish_chunk("stop")])
     body = request_body(stream=False, tools=[READ_TOOL])
-    async with make_client(fake) as client:
+    async with make_client(fake, path_aliases=[["/work/old-root", "/work/new-root"]]) as client:
         first = await client.post("/v1/messages", json=body)
         assert first.status_code == 200
         followup = request_body(stream=False, tools=[READ_TOOL])
@@ -290,7 +292,7 @@ async def test_stats_records_preflight_success_outcome():
                     "id": "c1",
                     "type": "tool_use",
                     "name": "Read",
-                    "input": {"file_path": "/Users/jgavinray/dev/pr/src/main.c"},
+                    "input": {"file_path": "/work/new-root/src/main.c"},
                 }],
             },
             {
@@ -333,21 +335,15 @@ async def test_pipeline_applied_end_to_end():
 
 async def test_path_alias_canonicalized_before_backend_prompt():
     body = request_body(stream=False, tools=[READ_TOOL])
-    body["messages"] = [{"role": "user", "content": "Read /Users/jgavinray/dev-pr/src/main.c"}]
+    body["messages"] = [{"role": "user", "content": "Read /work/old-root/src/main.c"}]
     fake = FakeOpenAI()
     fake.push([text_chunk("ok"), finish_chunk("stop")])
-    backend_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
-    )
-    settings = Settings()
-    settings.backend.base_url = "http://fake/v1"
-    app = create_app(settings, backend_client=backend_client)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+    async with make_client(fake, path_aliases=[["/work/old-root", "/work/new-root"]]) as client:
         resp = await client.post("/v1/messages", json=body)
     assert resp.status_code == 200
     rendered = json.dumps(fake.requests[0])
-    assert "/Users/jgavinray/dev-pr" not in rendered
-    assert "/Users/jgavinray/dev/pr/src/main.c" in rendered
+    assert "/work/old-root" not in rendered
+    assert "/work/new-root/src/main.c" in rendered
 
 
 async def test_planning_scaffold_generated_once_and_injected():

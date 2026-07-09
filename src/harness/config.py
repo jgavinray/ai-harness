@@ -70,6 +70,10 @@ class PipelineCfg(BaseModel):
     guard_edit_without_read: bool = True
     guard_verify_after_edit: bool = True
     allowed_roots: list[str] = []
+    # Known-bad -> canonical path prefix pairs, rewritten in prompts (path
+    # canon stage) and outgoing tool calls (preflight). Deployment-specific:
+    # configure per install, empty by default.
+    path_aliases: list[list[str]] = []
     # The Claude Code client shares this harness's filesystem (localhost deploy).
     # When False (default), the harness is a remote proxy and MUST NOT validate
     # client paths against its own disk: parent-existence and allowed-root checks
