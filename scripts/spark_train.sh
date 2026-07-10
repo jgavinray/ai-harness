@@ -46,12 +46,14 @@ train)
     # The Spark's 121 GB unified memory is pinned by the heretic vLLM
     # (sacrificial tier) — stop it for the window, always restart after.
     run "cd $HERETIC_COMPOSE && docker compose stop"
+    # $WORK is bind-mounted at /work: every path handed to the trainer must
+    # use the container-side prefix (first run failed on the host path).
     run "nohup docker run --rm --gpus all --ipc=host \
         -v $WORK:/work $IMAGE \
         python3 /work/qlora_train.py \
             --model /work/Qwen3.6-27B \
-            --data $CORPUS_REMOTE \
-            --out ${ADAPTER} \
+            --data /work/$(basename "$CORPUS_REMOTE") \
+            --out /work/adapters/$(date +%F) \
             --quant none \
         > $TRAIN_LOG 2>&1 && cd $HERETIC_COMPOSE && docker compose start \
         & echo train pid \$!"
