@@ -72,6 +72,23 @@ def test_qlora_train_dry_run_needs_no_gpu_deps(tmp_path):
     cfg = json.loads(r.stdout)
     assert cfg["model"] == "base"
     assert cfg["rows"] == 1
+    assert cfg["quant"] == "nf4"
+
+
+def test_qlora_train_supports_unquantized_lora(tmp_path):
+    # bitsandbytes has no CUDA aarch64 binary for the DGX Spark (GB10), so
+    # the trainer must support plain bf16 LoRA (--quant none); the Spark's
+    # 121 GB unified memory holds the 27B in bf16.
+    import subprocess
+    data = tmp_path / "c.jsonl"
+    data.write_text(json.dumps({"messages": []}) + "\n")
+    r = subprocess.run(
+        [sys.executable, str(Path("scripts/qlora_train.py").resolve()),
+         "--model", "base", "--data", str(data), "--out", str(tmp_path / "a"),
+         "--quant", "none", "--dry-run"],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(r.stdout)["quant"] == "none"
 
 
 def test_shadow_eval_execute_runs_commands():

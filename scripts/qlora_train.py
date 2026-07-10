@@ -26,6 +26,7 @@ def resolve(args: argparse.Namespace) -> dict:
         "batch_size": args.batch_size,
         "grad_accum": args.grad_accum,
         "max_seq_len": args.max_seq_len,
+        "quant": args.quant,
     }
 
 
@@ -36,14 +37,16 @@ def train(cfg: dict) -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from trl import SFTConfig, SFTTrainer
 
-    quant = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg["model"], quantization_config=quant, device_map="auto"
-    )
+    # --quant none = plain bf16 LoRA: bitsandbytes ships no CUDA aarch64
+    # binary (DGX Spark GB10), and its 121 GB unified memory holds bf16.
+    load_kwargs: dict = {"device_map": "auto", "dtype": torch.bfloat16}
+    if cfg["quant"] == "nf4":
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+    model = AutoModelForCausalLM.from_pretrained(cfg["model"], **load_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
     dataset = load_dataset("json", data_files=cfg["data"], split="train")
     trainer = SFTTrainer(
@@ -63,6 +66,7 @@ def train(cfg: dict) -> None:
             gradient_accumulation_steps=cfg["grad_accum"],
             max_length=cfg["max_seq_len"],
             bf16=True,
+            gradient_checkpointing=True,
             logging_steps=10,
             save_strategy="epoch",
         ),
@@ -82,6 +86,7 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--max-seq-len", type=int, default=8192)
+    ap.add_argument("--quant", choices=["nf4", "none"], default="nf4")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     cfg = resolve(args)
