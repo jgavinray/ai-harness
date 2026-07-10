@@ -97,8 +97,12 @@ catches any regression before the user does.
 ### Phase 2 — the learning leg
 
 - `lora_train.py` grows backends: `--backend cuda` (QLoRA via
-  peft/transformers on the RTX Pro 6000) and the existing `--backend mlx`
-  (Apple silicon boxes). Same gated corpus in, adapter dir out.
+  peft/transformers) and the existing `--backend mlx` (Apple silicon
+  boxes). Same gated corpus in, adapter dir out. **Training host is the
+  DGX Spark** (user decision 2026-07-09): its 121 GB unified memory is
+  pinned by the sacrificial-tier heretic vLLM, which is cheap to stop for
+  a training window — unlike the RTX Pro 6000, which serves `main`.
+  aarch64: run inside NVIDIA's ARM torch container (NGC), not host pip.
 - **Candidate serving via vLLM `--enable-lora`:** the candidate is the base
   27B plus an adapter, served by the existing vLLM instance under a new
   model name — no second GPU, no model copy. `harness.toml` gains the
