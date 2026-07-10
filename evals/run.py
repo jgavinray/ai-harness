@@ -85,6 +85,11 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
     subprocess.run(["git", "add", "-A"], cwd=workdir, check=True)
     subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
                     "commit", "-qm", "initial"], cwd=workdir, check=True)
+    setup = task_dir / "setup.sh"
+    if setup.exists():
+        # Tasks that review pending work overlay uncommitted changes on top
+        # of the initial commit.
+        subprocess.run(["bash", str(setup), str(task_dir)], cwd=workdir, check=True)
 
     server = subprocess.Popen(
         [PYTHON, "-m", "harness", "--config", str(cfg_path)],

@@ -16,7 +16,6 @@ from pathlib import Path
 
 from harness.config import Settings
 from harness.ir import Conversation, ToolCall, ToolCallPart
-from harness.planning import plan_status
 
 EDIT_TOOLS = {"Edit", "MultiEdit"}
 VERIFY_WORDS = (
@@ -293,9 +292,6 @@ def is_verify_instruction(text: str) -> bool:
 def _verification_required(conv: Conversation, settings: Settings) -> bool:
     if has_unverified_edit(conv):
         return True
-    plan = plan_status(conv.system)
-    if settings.planning.enabled and plan is not None and _is_verify_step(plan[2]):
-        return True
     latest = _latest_user_text(conv)
     return is_verify_instruction(latest)
 
@@ -563,18 +559,6 @@ def guard_tool_call(
             "edit_without_read",
             f"Read {path!r} before editing it, then retry the edit with the exact current text.",
         )
-    plan = plan_status(conv.system)
-    if (
-        settings.planning.enabled
-        and plan is not None
-        and call.name in EDIT_TOOLS | {"Write"}
-        and _is_verify_step(plan[2])
-    ):
-        return (
-            "plan_drift",
-            f"The current plan step is verification: {plan[2]!r}. "
-            "Run the verification step before making more edits unless verification fails.",
-        )
     return None
 
 def guard_done_claim(
@@ -582,13 +566,10 @@ def guard_done_claim(
 ) -> tuple[str, str] | None:
     if not settings.pipeline.workflow_guards or not settings.pipeline.guard_verify_after_edit:
         return None
-    plan = plan_status(conv.system)
-    if settings.planning.enabled and plan is not None and _done_claim(text) and plan[0] < plan[1]:
-        return (
-            "plan_drift",
-            f"The plan still has open steps: currently step {plan[0]}/{plan[1]} ({plan[2]}). "
-            "Continue with the next planned action instead of claiming completion.",
-        )
+    # The plan status line is informational only: its step position tracks
+    # tool-call count, not real progress, so keying enforcement on it fires
+    # on fiction (live lockout, 2026-07-09). Done-claim pressure comes from
+    # real unverified edits.
     if has_unverified_edit(conv) and _done_claim(text):
         return (
             "verify_after_edit",
@@ -596,6 +577,3 @@ def guard_done_claim(
             "Run a verification command now; only claim completion after it passes.",
         )
     return None
-
-def _is_verify_step(step: str) -> bool:
-    return _has_verify_intent(step.lower())

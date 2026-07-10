@@ -16,7 +16,6 @@ from harness.guards import (
     unverified_edit_count,
 )
 from harness.ir import Conversation, TextPart, ToolCallPart
-from harness.planning import plan_status
 
 READONLY_TOOLS = ("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch")
 # Write stays available outside verify state: creating a new file is
@@ -56,19 +55,6 @@ def _read_seen(conv: Conversation) -> bool:
     )
 
 
-def _is_verify_step(step: str) -> bool:
-    return _has_verify_intent(step.lower())
-
-
-def _has_verify_intent(text: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(verify|check|build|compile|lint)\b|\brun(?:ning)?\s+(?:the\s+)?tests?\b",
-            text,
-        )
-    )
-
-
 def _has_inspect_intent(text: str) -> bool:
     return bool(re.search(r"\b(read|inspect|review|search|find|open|list)\b|look at", text))
 
@@ -77,11 +63,13 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
     if not settings.pipeline.action_state_tools:
         return ActionState("unrestricted", ())
 
-    plan = plan_status(conv.system)
     # Bind verify only after a whole change-set of unverified edits: renames
     # and refactors need consecutive edits, and binding at the first edit made
     # them impossible to finish. The done-claim gate still demands
-    # verification for any unverified edit.
+    # verification for any unverified edit. The plan status line must never
+    # bind state: its step position tracks tool-call count, not real
+    # progress, so long sessions pin to the final "Verify ..." step and a
+    # plan-keyed binding locks them there (live lockout, 2026-07-09).
     if unverified_edit_count(conv) >= settings.pipeline.unverified_edit_limit:
         return ActionState(
             "verify",
@@ -89,14 +77,6 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
             requires_tool=True,
             required_tool="Bash",
             reason="unverified_edit",
-        )
-    if settings.planning.enabled and plan is not None and _is_verify_step(plan[2]):
-        return ActionState(
-            "verify",
-            VERIFY_TOOLS,
-            requires_tool=True,
-            required_tool="Bash",
-            reason="plan_verify_step",
         )
 
     latest = _latest_user_text(conv)

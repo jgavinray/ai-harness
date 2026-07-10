@@ -134,13 +134,52 @@ def test_all_tasks_complete_and_checkers_valid():
     names = {p.name for p in TASKS.iterdir()}
     assert names == {
         "fix-test", "add-endpoint", "rename-refactor", "find-and-report",
-        "multi-step", "tool-discovery", "long-horizon",
+        "multi-step", "tool-discovery", "long-horizon", "code-review",
     }
     for task in TASKS.iterdir():
         assert (task / "prompt.txt").exists(), task
         assert (task / "check.sh").exists(), task
         assert (task / "repo_template").is_dir(), task
         subprocess.run(["bash", "-n", str(task / "check.sh")], check=True)
+
+
+def test_runner_applies_task_setup_script():
+    # code-review needs uncommitted changes on top of the initial commit;
+    # tasks provide them via an optional setup.sh the runner applies.
+    runner = Path("evals/run.py").read_text()
+    assert "setup.sh" in runner
+
+
+def test_code_review_task_plants_uncommitted_defect(tmp_path):
+    # live regression 2026-07-09 (session fee3e2f8): a real read-only review
+    # session was strangled by plan-step verify lockout; the synthetic
+    # envelope had no family with this workload shape. The family must
+    # produce a real uncommitted diff whose only defect is in
+    # billing.py:apply_discount, and the checker must key on exactly that.
+    import shutil
+    task = TASKS / "code-review"
+    work = tmp_path / "code-review"
+    shutil.copytree(task / "repo_template", work)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", "-c", "user.email=e@l", "-c", "user.name=e",
+                    "commit", "-qm", "initial"], cwd=work, check=True)
+    subprocess.run(["bash", str((task / "setup.sh").resolve()), str(task.resolve())],
+                   cwd=work, check=True)
+    diff = subprocess.run(["git", "diff"], cwd=work, capture_output=True,
+                          text=True, check=True).stdout
+    assert "apply_discount" in diff
+    assert len([l for l in diff.splitlines() if l.startswith("+++")]) >= 3
+
+    shutil.copy(task / "check.sh", work / "check.sh")
+    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
+    assert r.returncode != 0, "code-review passes its checker without any work"
+    (work / "answer.txt").write_text(
+        "The discount is added instead of subtracted.\n"
+        "DEFECT: billing.py:apply_discount\n"
+    )
+    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_runner_allows_skill_tool_for_skill_compiler_eval():

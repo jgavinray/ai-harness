@@ -1072,10 +1072,13 @@ def conv_with_plan(system_status: str) -> Conversation:
     )
 
 
-async def test_plan_done_claim_before_final_step_is_drift():
+async def test_plan_open_steps_do_not_block_done_claim():
+    # live regression 2026-07-09: the plan status line advances by tool-call
+    # count, not real progress, so any enforcement keyed on it fires on
+    # fiction. The plan is an informational rail; done-claim pressure comes
+    # from has_unverified_edit only.
     fake = FakeOpenAI()
     fake.push([text_chunk("done"), finish_chunk("stop")])
-    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
     s = Settings()
     s.planning.enabled = True
     backend = make(fake, "openai")
@@ -1086,19 +1089,19 @@ async def test_plan_done_claim_before_final_step_is_drift():
             get_profile("qwen"), backend, s, metrics,
         )
     ]
-    assert TextDelta("done") not in evs
-    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
-    assert metrics["guard_fires"]["plan_drift"] == 1
-    assert metrics["plan_drift"] == 1
+    assert TextDelta("done") in evs
+    assert metrics["plan_drift"] == 0
 
 
-async def test_edit_during_verify_plan_step_is_drift():
+async def test_edit_during_verify_plan_step_is_allowed():
+    # live regression 2026-07-09: sessions longer than their plan pin to the
+    # final "Verify ..." step, so this guard blocked all edits for the rest of
+    # the session. Verify pressure binds via unverified_edit_limit instead.
     fake = FakeOpenAI()
     fake.push([
         tool_chunk("e1", "Edit", '{"file_path": "/x", "old_string": "a", "new_string": "b"}'),
         finish_chunk("tool_calls"),
     ])
-    fake.push([tool_chunk("b1", "Bash", '{"command": "pytest -q"}'), finish_chunk("tool_calls")])
     s = Settings()
     s.planning.enabled = True
     backend = make(fake, "openai")
@@ -1109,10 +1112,35 @@ async def test_edit_during_verify_plan_step_is_drift():
             get_profile("qwen"), backend, s, metrics,
         )
     ]
-    assert not any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
-    assert any(isinstance(e, ToolCall) and e.name == "Bash" for e in evs)
-    assert metrics["guard_fires"]["plan_drift"] == 1
-    assert metrics["plan_drift"] == 1
+    assert any(isinstance(e, ToolCall) and e.name == "Edit" for e in evs)
+    assert metrics["plan_drift"] == 0
+
+
+async def test_readonly_bash_allowed_during_pinned_plan_verify_step():
+    # live regression 2026-07-09 (session fee3e2f8): `git diff HEAD` — the
+    # input a review task needs — was preflight-denied 24 times as
+    # non_verification_command because the plan status line was pinned at a
+    # verify step; the session had zero edits to verify.
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("b1", "Bash", '{"command": "git diff HEAD"}'),
+        finish_chunk("tool_calls"),
+    ])
+    s = Settings()
+    s.planning.enabled = True
+    backend = make(fake, "openai")
+    metrics: dict = {}
+    evs = [
+        e async for e in run(
+            conv_with_plan("Plan status: Step 3/3: Verify the changes; done: 1✓ 2✓"),
+            get_profile("qwen"), backend, s, metrics,
+        )
+    ]
+    assert any(
+        isinstance(e, ToolCall) and e.arguments.get("command") == "git diff HEAD"
+        for e in evs
+    )
+    assert metrics["preflight_denies"] == 0
 
 
 async def test_skill_call_injects_compiled_procedure(tmp_path):

@@ -135,6 +135,30 @@ def test_verify_binds_at_unverified_edit_limit():
     assert "Edit" not in state.allowed_tools
 
 
+def test_plan_verify_step_does_not_lock_readonly_session():
+    # live regression 2026-07-09 (session fee3e2f8): the plan status line
+    # advances by tool-call count, so any session longer than its plan pins to
+    # the final "Verify ..." step; a read-only review session was then locked
+    # in verify state for 55 straight requests with zero edits to verify.
+    settings = Settings()
+    settings.planning.enabled = True
+    conv = Conversation(
+        "sys\n\n## Execution plan\n1. Inspect\n2. Review\n3. Verify\n"
+        "Plan status: Step 3/3: Verify the changes with the project linter; done: 1✓ 2✓",
+        (
+            Turn("user", (TextPart("Review the pending changes on this branch for defects and style issues."),)),
+            Turn("assistant", (ToolCallPart("r1", "Read", {"file_path": "/x"}),)),
+            Turn("user", (ToolResultPart("r1", "contents"),)),
+        ),
+        _tools(),
+        GenParams(max_tokens=512),
+    )
+    state = current_action_state(conv, settings)
+    assert state.name != "verify"
+    assert "Read" in state.allowed_tools
+    assert not state.requires_tool
+
+
 def test_effort_testing_text_does_not_force_verify():
     read = ToolDef("Read", "reads", {"type": "object"}, {"type": "object"})
     bash = ToolDef("Bash", "runs", {"type": "object"}, {"type": "object"})
