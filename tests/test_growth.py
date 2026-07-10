@@ -91,6 +91,27 @@ def test_qlora_train_supports_unquantized_lora(tmp_path):
     assert json.loads(r.stdout)["quant"] == "none"
 
 
+def test_qlora_normalize_parses_tool_call_arguments():
+    # Training failure 2026-07-09 on the Spark: the corpus keeps
+    # tool_calls[].function.arguments as a JSON string (OpenAI wire format),
+    # but Qwen's chat template iterates arguments as a mapping
+    # (jinja2: "Can only get item pairs from a mapping").
+    import qlora_train
+    row = {"messages": [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "t1", "type": "function",
+             "function": {"name": "Read", "arguments": "{\"file_path\": \"/x\"}"}},
+            {"id": "t2", "type": "function",
+             "function": {"name": "Bash", "arguments": "not json"}},
+        ]},
+        {"role": "tool", "content": "ok"},
+    ]}
+    out = qlora_train.normalize(row)
+    calls = out["messages"][0]["tool_calls"]
+    assert calls[0]["function"]["arguments"] == {"file_path": "/x"}
+    assert calls[1]["function"]["arguments"] == {"raw": "not json"}
+
+
 def test_shadow_eval_execute_runs_commands():
     rcs = shadow_eval.run_commands(["true", "false"], execute=True)
     assert rcs == [0, 1]

@@ -30,6 +30,47 @@ def resolve(args: argparse.Namespace) -> dict:
     }
 
 
+def normalize(row: dict) -> dict:
+    """Corpus rows carry OpenAI wire format: tool_calls[].function.arguments
+    is a JSON string. Qwen's chat template iterates arguments as a mapping,
+    so parse the strings (unparseable ones wrap as {"raw": ...})."""
+    for message in row["messages"]:
+        for call in message.get("tool_calls") or []:
+            arguments = call.get("function", {}).get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                except ValueError:
+                    parsed = None
+                if not isinstance(parsed, dict):
+                    parsed = {"raw": arguments}
+                call["function"]["arguments"] = parsed
+    return row
+
+
+def check_data(cfg: dict) -> None:
+    """Tokenizer-only preflight: render every normalized row through the
+    model's chat template so format mismatches surface all at once, without
+    paying the 52 GB model load per failure."""
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
+    failures = 0
+    for i, line in enumerate(Path(cfg["data"]).open()):
+        if not line.strip():
+            continue
+        row = normalize(json.loads(line))
+        try:
+            tokenizer.apply_chat_template(row["messages"], tokenize=False)
+        except Exception as exc:
+            failures += 1
+            if failures <= 5:
+                print(f"row {i}: {type(exc).__name__}: {str(exc)[:160]}")
+    print(f"checked rows; failures: {failures}")
+    if failures:
+        raise SystemExit(1)
+
+
 def train(cfg: dict) -> None:
     import torch
     from datasets import load_dataset
@@ -49,6 +90,7 @@ def train(cfg: dict) -> None:
     model = AutoModelForCausalLM.from_pretrained(cfg["model"], **load_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
     dataset = load_dataset("json", data_files=cfg["data"], split="train")
+    dataset = dataset.map(normalize)
     trainer = SFTTrainer(
         model=model,
         processing_class=tokenizer,
@@ -88,10 +130,14 @@ def main() -> None:
     ap.add_argument("--max-seq-len", type=int, default=8192)
     ap.add_argument("--quant", choices=["nf4", "none"], default="nf4")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--check-data", action="store_true")
     args = ap.parse_args()
     cfg = resolve(args)
     if args.dry_run:
         print(json.dumps(cfg))
+        return
+    if args.check_data:
+        check_data(cfg)
         return
     train(cfg)
 

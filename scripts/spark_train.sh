@@ -9,6 +9,7 @@
 #   scripts/spark_train.sh sync       # ship corpus + trainer + Dockerfile
 #   scripts/spark_train.sh download   # start/resume bf16 base download (bg)
 #   scripts/spark_train.sh image      # build the spark-trainer image
+#   scripts/spark_train.sh check      # tokenizer-only corpus/template preflight
 #   scripts/spark_train.sh train      # stop heretic serving, train, restart
 #   scripts/spark_train.sh fetch      # copy the adapter back to ./adapters/
 #   scripts/spark_train.sh status     # download/training progress at a glance
@@ -41,6 +42,15 @@ download)
     ;;
 image)
     run "docker build -q -t $IMAGE -f $WORK/Dockerfile.spark-trainer $WORK"
+    ;;
+check)
+    # Cheap (no GPU, no model load): render every row through the chat
+    # template so data bugs surface together, not one model-load at a time.
+    run "docker run --rm -v $WORK:/work $IMAGE \
+        python3 /work/qlora_train.py \
+            --model /work/Qwen3.6-27B \
+            --data /work/$(basename "$CORPUS_REMOTE") \
+            --out /tmp/unused --quant none --check-data"
     ;;
 train)
     # The Spark's 121 GB unified memory is pinned by the heretic vLLM
