@@ -217,6 +217,12 @@ def classify_bash_command(command: str) -> str:
     lowered = command.lower().strip()
     if any(re.search(pattern, lowered) for pattern in DANGEROUS_PATTERNS):
         return "dangerous"
+    # `cd <dir> && <cmd>` runs <cmd>; classify what actually runs, or the
+    # leading cd hides the executable (live denial of a project linter,
+    # 2026-07-09).
+    chained = re.match(r"\s*cd\s+[^&;|]+&&\s*(.+)", command, re.DOTALL)
+    if chained:
+        return classify_bash_command(chained.group(1))
     try:
         tokens = shlex.split(command)
     except ValueError:

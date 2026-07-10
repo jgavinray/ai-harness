@@ -850,6 +850,20 @@ def test_running_project_script_counts_as_verification():
     assert classify_bash_command("python3 --version") == "unknown"
 
 
+def test_cd_prefix_does_not_hide_command_class():
+    # live trace 2026-07-09 (session fee3e2f8): `cd <repo> && python
+    # apps/codestyle/codestyle-cpp.py` — the project's own linter, run as
+    # verification — classified "unknown" because the leading cd hid the
+    # interpreter, and was preflight-denied in verify state.
+    from harness.guards import classify_bash_command
+    assert classify_bash_command(
+        "cd /home/azeroth/azerothcore-wotlk && python apps/codestyle/codestyle-cpp.py"
+    ) == "verify"
+    assert classify_bash_command("cd /repo && pytest -q") == "test"
+    assert classify_bash_command("cd /repo && git status --short") == "inspect"
+    assert classify_bash_command("cd /repo && rm -rf /") == "dangerous"
+
+
 async def test_verify_state_accepts_project_script_run():
     fake = FakeOpenAI()
     fake.push([
