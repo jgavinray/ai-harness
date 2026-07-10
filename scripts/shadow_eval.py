@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""List candidate backends and print eval commands for shadow runs."""
+"""Shadow-eval candidate backends: list the envelope commands, or run them."""
 
 from __future__ import annotations
 
 import argparse
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,13 +29,23 @@ def candidate_commands(config_path: Path, out_dir: str = "evals/results") -> lis
     return cmds
 
 
+def run_commands(cmds: list[str], execute: bool) -> list[int]:
+    if not execute:
+        for cmd in cmds:
+            print(cmd)
+        return []
+    return [subprocess.run(shlex.split(cmd)).returncode for cmd in cmds]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="harness.toml")
     ap.add_argument("--out", default="evals/results")
+    ap.add_argument("--execute", action="store_true")
     args = ap.parse_args()
-    for cmd in candidate_commands(Path(args.config), args.out):
-        print(cmd)
+    rcs = run_commands(candidate_commands(Path(args.config), args.out), args.execute)
+    if any(rcs):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

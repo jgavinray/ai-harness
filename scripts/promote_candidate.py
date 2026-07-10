@@ -21,11 +21,14 @@ def should_promote(results: Path, incumbent: str, candidate: str, min_delta: flo
 
 
 def promote_config(config: Path, backend_name: str, roles: list[str]) -> None:
-    lines = config.read_text().splitlines()
+    config.write_text(_rewrite_roles(config.read_text(), backend_name, roles))
+
+
+def _rewrite_roles(text: str, backend_name: str, roles: list[str]) -> str:
     in_block = False
     out = []
     replaced = False
-    for line in lines:
+    for line in text.splitlines():
         if line.strip() == "[[backends]]":
             in_block = True
         elif in_block and line.startswith("[") and line.strip() != "[[backends]]":
@@ -39,7 +42,23 @@ def promote_config(config: Path, backend_name: str, roles: list[str]) -> None:
             out.append(line)
     if not replaced:
         raise ValueError(f"backend {backend_name!r} roles not found")
-    config.write_text("\n".join(out) + "\n")
+    return "\n".join(out) + "\n"
+
+
+def propose_config(config: Path, backend_name: str, roles: list[str]) -> str:
+    """Write <config>.proposed and return the unified diff; never touches the
+    live config (promotion stays a human-reviewed commit until the loop has a
+    track record — spec, umbrella principle 1)."""
+    import difflib
+
+    old = config.read_text()
+    new = _rewrite_roles(old, backend_name, roles)
+    proposed = config.with_suffix(config.suffix + ".proposed")
+    proposed.write_text(new)
+    return "".join(difflib.unified_diff(
+        old.splitlines(keepends=True), new.splitlines(keepends=True),
+        fromfile=str(config), tofile=str(proposed),
+    ))
 
 
 def main() -> None:
@@ -51,11 +70,16 @@ def main() -> None:
     ap.add_argument("--backend-name", required=True)
     ap.add_argument("--min-delta", type=float, default=0.0)
     ap.add_argument("--roles", default="main")
+    ap.add_argument("--apply", action="store_true",
+                    help="edit the config in place instead of proposing a diff")
     args = ap.parse_args()
     if not should_promote(Path(args.results), args.incumbent, args.candidate, args.min_delta):
         raise SystemExit("candidate did not pass promotion gate")
-    promote_config(Path(args.config), args.backend_name, args.roles.split(","))
-    print(f"promoted {args.backend_name} to roles {args.roles}")
+    if args.apply:
+        promote_config(Path(args.config), args.backend_name, args.roles.split(","))
+        print(f"promoted {args.backend_name} to roles {args.roles}")
+    else:
+        print(propose_config(Path(args.config), args.backend_name, args.roles.split(",")))
 
 
 if __name__ == "__main__":

@@ -201,6 +201,14 @@ class FlywheelCfg(BaseModel):
     analytics_db: str = "logs/analytics.duckdb"
     log_path: str = "logs/flywheel.jsonl"
     sentinel_state_path: str = "logs/flywheel_sentinel.json"
+    # Phase 2 threshold job: emit a training_due record (with the prepared
+    # train/shadow/promote commands) once the gated corpus grows this many
+    # rows. 0 disables. Training itself stays human-triggered: the training
+    # GPU is occupied by serving.
+    train_threshold_rows: int = 0
+    train_state_path: str = "logs/flywheel_train.json"
+    train_base_model: str = ""  # HF id/path of the bf16 base for QLoRA
+    adapters_dir: str = "adapters"
 
 
 class CacheCfg(BaseModel):

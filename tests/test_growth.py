@@ -48,6 +48,54 @@ def test_lora_train_command():
     ]
 
 
+def test_lora_train_cuda_command():
+    # Phase 2 (flywheel spec): QLoRA on the RTX Pro 6000 via a bundled
+    # trainer script; mlx stays the Apple-silicon path.
+    cmd = lora_train.command("c.jsonl", "base", "adapters/out", backend="cuda")
+    assert cmd[0] == sys.executable
+    assert cmd[1].endswith("scripts/qlora_train.py")
+    assert cmd[2:] == ["--model", "base", "--data", "c.jsonl", "--out", "adapters/out"]
+
+
+def test_qlora_train_dry_run_needs_no_gpu_deps(tmp_path):
+    # The trainer must resolve and print its config without importing
+    # torch/transformers, so the threshold job can emit it on any host.
+    import subprocess
+    data = tmp_path / "c.jsonl"
+    data.write_text(json.dumps({"messages": [{"role": "user", "content": "x"}]}) + "\n")
+    r = subprocess.run(
+        [sys.executable, str(Path("scripts/qlora_train.py").resolve()),
+         "--model", "base", "--data", str(data), "--out", str(tmp_path / "a"),
+         "--dry-run"],
+        capture_output=True, text=True, check=True,
+    )
+    cfg = json.loads(r.stdout)
+    assert cfg["model"] == "base"
+    assert cfg["rows"] == 1
+
+
+def test_shadow_eval_execute_runs_commands():
+    rcs = shadow_eval.run_commands(["true", "false"], execute=True)
+    assert rcs == [0, 1]
+    assert shadow_eval.run_commands(["false"], execute=False) == []
+
+
+def test_promote_candidate_proposal_leaves_config_untouched(tmp_path):
+    # Spec: promotion emits a proposed diff for human review; in-place edit
+    # only via --apply (autonomy earned, umbrella principle 1).
+    cfg = tmp_path / "harness.toml"
+    original = (
+        '[[backends]]\nname = "cand"\nbase_url = "http://cand/v1"\n'
+        'model = "c"\nroles = ["candidate"]\n'
+    )
+    cfg.write_text(original)
+    diff = promote_candidate.propose_config(cfg, "cand", ["main", "subagent"])
+    assert cfg.read_text() == original
+    assert '+roles = ["main", "subagent"]' in diff
+    proposed = cfg.with_suffix(".toml.proposed")
+    assert 'roles = ["main", "subagent"]' in proposed.read_text()
+
+
 def test_relax_scaffold_gate_and_config_edit(tmp_path):
     results = tmp_path / "results.jsonl"
     results.write_text("\n".join(json.dumps(r) for r in [

@@ -105,3 +105,42 @@ def test_nightly_jobs_follow_settings(tmp_path):
     jobs = dict(nightly_jobs(s))
     assert "memory_distill" not in jobs
     assert "traces/sessions.jsonl" in jobs["corpus"]
+
+
+def test_training_due_fires_on_corpus_growth(tmp_path):
+    # Phase 2 (flywheel spec): when the gated corpus grows past the
+    # threshold, the flywheel emits a training_due record with the prepared
+    # commands. Training itself stays human-triggered: the RTX Pro 6000 is
+    # occupied by serving, so the job must never grab the GPU on its own.
+    from harness.flywheel import check_training_due
+    s = Settings()
+    s.flywheel.train_threshold_rows = 100
+    s.flywheel.corpus_path = str(tmp_path / "corpus.jsonl")
+    s.flywheel.train_state_path = str(tmp_path / "train_state.json")
+    logger = RequestLogger(tmp_path / "flywheel.jsonl")
+    (tmp_path / "corpus.jsonl").write_text("{}\n" * 40)
+    check_training_due(s, logger)
+    assert not (tmp_path / "flywheel.jsonl").exists()  # below threshold
+
+    (tmp_path / "corpus.jsonl").write_text("{}\n" * 150)
+    check_training_due(s, logger)
+    rec = json.loads((tmp_path / "flywheel.jsonl").read_text().splitlines()[-1])
+    assert rec["job"] == "training_due"
+    assert rec["corpus_rows"] == 150
+    assert any("qlora_train.py" in c for c in rec["commands"])
+
+    # growth resets: no re-fire until another threshold's worth accrues
+    check_training_due(s, logger)
+    lines = (tmp_path / "flywheel.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+
+
+def test_training_due_disabled_by_default(tmp_path):
+    from harness.flywheel import check_training_due
+    s = Settings()
+    s.flywheel.corpus_path = str(tmp_path / "corpus.jsonl")
+    s.flywheel.train_state_path = str(tmp_path / "train_state.json")
+    (tmp_path / "corpus.jsonl").write_text("{}\n" * 100000)
+    logger = RequestLogger(tmp_path / "flywheel.jsonl")
+    check_training_due(s, logger)
+    assert not (tmp_path / "flywheel.jsonl").exists()

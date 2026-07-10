@@ -127,6 +127,7 @@ def nightly_cycle(settings: Settings, logger: RequestLogger, cwd: Path) -> None:
     Path(fly.corpus_path).parent.mkdir(parents=True, exist_ok=True)
     for name, argv in nightly_jobs(settings):
         run_job(name, argv, cwd, logger)
+    check_training_due(settings, logger)
     start = time.monotonic()
     removed = prune_partitions(
         Path(settings.log.requests_dir) if settings.log.requests_dir else None,
@@ -139,6 +140,44 @@ def nightly_cycle(settings: Settings, logger: RequestLogger, cwd: Path) -> None:
         "rc": 0,
         "duration_s": round(time.monotonic() - start, 1),
         "removed": len(removed),
+    })
+
+
+def check_training_due(settings: Settings, logger: RequestLogger) -> None:
+    """Phase 2 threshold job: when the gated corpus has grown past the
+    configured row count since the last firing, emit a training_due record
+    carrying the prepared train/shadow/promote commands. Never runs them —
+    the training GPU is shared with serving, so execution is human-triggered
+    (autonomy earned, umbrella principle 1)."""
+    fly = settings.flywheel
+    if not fly.train_threshold_rows:
+        return
+    corpus = Path(fly.corpus_path)
+    rows = sum(1 for line in corpus.open() if line.strip()) if corpus.exists() else 0
+    state_path = Path(fly.train_state_path)
+    prev = 0
+    if state_path.exists():
+        prev = json.loads(state_path.read_text()).get("corpus_rows", 0)
+    if rows - prev < fly.train_threshold_rows:
+        return
+    py = sys.executable
+    base = fly.train_base_model or "<set flywheel.train_base_model>"
+    adapter = f"{fly.adapters_dir}/{time.strftime('%Y-%m-%d')}"
+    commands = [
+        f"{py} scripts/qlora_train.py --model {base} --data {fly.corpus_path} --out {adapter}",
+        f"{py} scripts/shadow_eval.py --execute",
+        f"{py} scripts/promote_candidate.py --results <shadow results> --config harness.toml "
+        "--incumbent <main model> --candidate <candidate model> --backend-name <candidate>",
+    ]
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"ts": time.time(), "corpus_rows": rows}))
+    logger.write({
+        "ts": time.time(),
+        "job": "training_due",
+        "rc": 0,
+        "corpus_rows": rows,
+        "grown_rows": rows - prev,
+        "commands": commands,
     })
 
 
