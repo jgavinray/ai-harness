@@ -1157,6 +1157,44 @@ async def test_readonly_bash_allowed_during_pinned_plan_verify_step():
     assert metrics["preflight_denies"] == 0
 
 
+async def test_agent_call_relays_through_action_states():
+    # live regression 2026-07-11 (session fee3e2f8): "[action state denied
+    # Agent: expected Edit, MultiEdit, Write, Bash, Read, ...]" — every state
+    # allowlist omitted Agent, so subagent fan-out was structurally
+    # impossible; the user's explicit "fan out subagents" was denied 9+
+    # times. States are subtractive now: the call must relay untouched and
+    # the tool must stay in the backend catalog.
+    agent_schema = {
+        "type": "object",
+        "properties": {"prompt": {"type": "string"}},
+        "required": ["prompt"],
+    }
+    tools = (
+        ToolDef("Read", "reads", READ_SCHEMA, READ_SCHEMA),
+        ToolDef("Bash", "runs", BASH_SCHEMA, BASH_SCHEMA),
+        ToolDef("Agent", "spawns a subagent", agent_schema, agent_schema),
+    )
+    conv_ = Conversation(
+        "sys",
+        (Turn("user", (TextPart(
+            "Please review this software project in detail; fan out "
+            "subagents to cover the modules."),)),),
+        tools,
+        GenParams(max_tokens=512, stream=True),
+    )
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("a1", "Agent", '{"prompt": "review the billing module"}'),
+        finish_chunk("tool_calls"),
+    ])
+    metrics: dict = {}
+    backend = make(fake, "openai")
+    evs = [e async for e in run(conv_, get_profile("qwen"), backend, Settings(), metrics)]
+    assert any(isinstance(e, ToolCall) and e.name == "Agent" for e in evs)
+    assert metrics["invalid_calls"] == 0
+    assert "Agent" in metrics["backend_tool_names"]
+
+
 async def test_skill_call_injects_compiled_procedure(tmp_path):
     skills = tmp_path / "skills"
     cache = tmp_path / "cache"

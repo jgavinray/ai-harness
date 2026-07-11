@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import gate_health  # noqa: E402
 import lora_train  # noqa: E402
 import promote_candidate  # noqa: E402
 import relax_scaffold  # noqa: E402
@@ -132,6 +133,36 @@ def test_promote_candidate_proposal_leaves_config_untouched(tmp_path):
     assert '+roles = ["main", "subagent"]' in diff
     proposed = cfg.with_suffix(".toml.proposed")
     assert 'roles = ["main", "subagent"]' in proposed.read_text()
+
+
+def test_gate_health_counts_denials_per_gate(tmp_path):
+    # Spec 2026-07-11 (default-open enforcement): telemetry is part of the
+    # gate. Five live incidents in a row were found by the user, not the
+    # system; this report is the nightly early-warning instead.
+    day = tmp_path / "2026-07-11"
+    day.mkdir(parents=True)
+    def ev(text):
+        return json.dumps({"t": "text", "text": text})
+    (day / "aaa.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        {"session_key": "aaa", "events": [
+            ev("\n[action state denied Agent: the inspect state blocks Edit]\n"),
+            ev("\n[action state denied Agent: the inspect state blocks Edit]\n"),
+        ]},
+        {"session_key": "aaa", "events": [
+            ev("\n[preflight denied Bash: non_verification_command]\n"),
+            ev("plain text"),
+        ]},
+    ]) + "\n")
+    (day / "bbb.jsonl").write_text(json.dumps(
+        {"session_key": "bbb", "events": [ev("no denials here")]}) + "\n")
+    report = gate_health.scan_day(day)
+    assert report["sessions"] == 2
+    assert report["sessions_with_denials"] == 1
+    assert report["denials"]["action_state:Agent"] == 2
+    assert report["denials"]["preflight:Bash"] == 1
+
+    out = gate_health.write_report(day, tmp_path / "out")
+    assert json.loads(out.read_text())["date"] == "2026-07-11"
 
 
 def test_relax_scaffold_gate_and_config_edit(tmp_path):

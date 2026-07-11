@@ -52,7 +52,11 @@ docker compose exec flywheel python -m harness.flywheel --config /config/harness
 6. Word-trigger heuristics over free-form prompt text are guilty until
    eval-proven (recurring bug shape: long task briefs locking the tool
    surface). Free-text intent may only bind for short imperative
-   instructions (`SHORT_INSTRUCTION_MAX_CHARS`).
+   instructions (`SHORT_INSTRUCTION_MAX_CHARS`). Enumerated tool allowlists
+   share the bug shape: enforcement may only SUBTRACT evidence-named tools,
+   never enumerate the permitted surface — unknown tools always pass (live
+   `Agent` denial 2026-07-11; see
+   docs/superpowers/specs/2026-07-11-default-open-enforcement.md).
 
 ## Architecture (the parts that span multiple files)
 

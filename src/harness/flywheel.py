@@ -113,6 +113,13 @@ def nightly_jobs(settings: Settings) -> list[tuple[str, list[str]]]:
     jobs.append(("analytics", [
         py, "scripts/analytics.py", "refresh", "--db", fly.analytics_db,
     ]))
+    if settings.traces.enabled and settings.traces.layout == "partitioned":
+        # Spec 2026-07-11 (default-open enforcement): telemetry is part of
+        # the gate — denials must surface in a morning report, not in the
+        # owner's session weeks later.
+        jobs.append(("gate_health", [
+            py, "scripts/gate_health.py", "--traces-dir", settings.traces.dir,
+        ]))
     if Path(settings.skills.dir).expanduser().is_dir():
         jobs.append(("compile_skills", [
             py, "scripts/compile_skills.py",

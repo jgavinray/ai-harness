@@ -93,6 +93,7 @@ def test_flywheel_status_reads_jobs_and_sentinel(tmp_path):
 def test_nightly_jobs_follow_settings(tmp_path):
     s = Settings()
     s.traces.dir = "traces"
+    s.traces.enabled = True
     s.traces.layout = "partitioned"
     s.memory.enabled = True
     jobs = dict(nightly_jobs(s))
@@ -100,10 +101,12 @@ def test_nightly_jobs_follow_settings(tmp_path):
     assert "--traces" in jobs["corpus"] and "traces" in jobs["corpus"]
     assert "--include-live" in jobs["corpus"]
     assert any("analytics.py" in a for a in jobs["analytics"])
+    assert any("gate_health.py" in a for a in jobs["gate_health"])
     s.memory.enabled = False
     s.traces.layout = "sessions"
     jobs = dict(nightly_jobs(s))
     assert "memory_distill" not in jobs
+    assert "gate_health" not in jobs
     assert "traces/sessions.jsonl" in jobs["corpus"]
 
 

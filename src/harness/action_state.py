@@ -2,6 +2,14 @@
 
 This is deliberately local protocol shaping, not task planning. The state only
 describes which tool surface is mechanically legal for the next backend call.
+
+Invariant (spec 2026-07-11-default-open-enforcement): states are SUBTRACTIVE.
+A state may only block tools whose misuse is named by a measured failure, and
+must never enumerate the permitted surface — enumerated allowlists silently
+deny every tool the author didn't foresee, including all future client tools
+(live regression 2026-07-11: `Agent` was absent from every allowlist, so
+subagent fan-out was structurally impossible and the user's explicit "fan out
+subagents" was denied 9+ times). Unknown tools always pass.
 """
 
 from __future__ import annotations
@@ -17,13 +25,11 @@ from harness.guards import (
 )
 from harness.ir import Conversation, TextPart, ToolCallPart
 
-READONLY_TOOLS = ("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch")
-# Write stays available outside verify state: creating a new file is
-# legitimate work in any phase and has no read-first precondition.
-INSPECT_TOOLS = READONLY_TOOLS + ("Bash", "Write")
+# The one evidence-backed subtraction: verify pressure blocks further edits
+# until a check runs (unverified-edit pileups, consistency spec 2026-07-07).
+# NotebookEdit is an edit tool by any other name.
 EDIT_TOOLS = ("Edit", "MultiEdit")
-CREATE_TOOLS = ("Write", "Bash")
-VERIFY_TOOLS = ("Bash",) + READONLY_TOOLS
+VERIFY_BLOCKED = EDIT_TOOLS + ("Write", "NotebookEdit")
 CREATE_WORDS = ("create", "new file", "add file", "write a file")
 VERIFY_WORDS = ("verify", "check", "run tests", "build", "compile", "lint")
 
@@ -31,7 +37,7 @@ VERIFY_WORDS = ("verify", "check", "run tests", "build", "compile", "lint")
 @dataclass(frozen=True)
 class ActionState:
     name: str
-    allowed_tools: tuple[str, ...]
+    blocked_tools: tuple[str, ...] = ()
     requires_tool: bool = False
     required_tool: str | None = None
     reason: str | None = None
@@ -61,7 +67,7 @@ def _has_inspect_intent(text: str) -> bool:
 
 def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
     if not settings.pipeline.action_state_tools:
-        return ActionState("unrestricted", ())
+        return ActionState("unrestricted")
 
     # Bind verify only after a whole change-set of unverified edits: renames
     # and refactors need consecutive edits, and binding at the first edit made
@@ -73,7 +79,7 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
     if unverified_edit_count(conv) >= settings.pipeline.unverified_edit_limit:
         return ActionState(
             "verify",
-            VERIFY_TOOLS,
+            VERIFY_BLOCKED,
             requires_tool=True,
             required_tool="Bash",
             reason="unverified_edit",
@@ -84,25 +90,35 @@ def current_action_state(conv: Conversation, settings: Settings) -> ActionState:
     # tests"); long task briefs that mention verify/create as steps must not
     # lock the session's tool surface (eval brick1-verify: multi-step 0/5).
     if is_verify_instruction(latest):
-        return ActionState("verify", VERIFY_TOOLS, requires_tool=True, required_tool="Bash", reason="verify_request")
+        return ActionState(
+            "verify",
+            VERIFY_BLOCKED,
+            requires_tool=True,
+            required_tool="Bash",
+            reason="verify_request",
+        )
     if len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS and any(word in latest for word in CREATE_WORDS):
-        return ActionState("create_file", CREATE_TOOLS, requires_tool=True, reason="create_request")
+        return ActionState("create_file", requires_tool=True, reason="create_request")
+    # inspect vs edit_existing is telemetry, not enforcement: read-before-edit
+    # is guard_edit_without_read's job (per-file, with actionable feedback);
+    # the old state-level Edit hiding was a coarser duplicate of that guard,
+    # and its inspect→edit_existing catalog flip broke prefix stability
+    # (Law 2) by changing the rendered tool list mid-session.
     if not settings.pipeline.guard_edit_without_read:
-        return ActionState("edit_existing", EDIT_TOOLS + ("Write", "Bash") + READONLY_TOOLS, reason="edit_guard_relaxed")
+        return ActionState("edit_existing", reason="edit_guard_relaxed")
     if _read_seen(conv):
-        return ActionState("edit_existing", EDIT_TOOLS + ("Write", "Bash") + READONLY_TOOLS, reason="file_read")
+        return ActionState("edit_existing", reason="file_read")
     requires_tool = (
         len(latest.strip()) <= SHORT_INSTRUCTION_MAX_CHARS
         and _has_inspect_intent(latest)
     )
-    return ActionState("inspect", INSPECT_TOOLS, requires_tool=requires_tool, reason="no_file_read")
+    return ActionState("inspect", requires_tool=requires_tool, reason="no_file_read")
 
 
 def shape_tools_for_state(conv: Conversation, state: ActionState) -> Conversation:
-    if not state.allowed_tools:
+    if not state.blocked_tools:
         return conv
-    allowed = set(state.allowed_tools)
-    shaped = tuple(tool for tool in conv.tools if tool.name in allowed)
+    shaped = tuple(tool for tool in conv.tools if tool.name not in state.blocked_tools)
     if not shaped:
         return conv
     return replace(conv, tools=shaped)

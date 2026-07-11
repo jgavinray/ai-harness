@@ -55,6 +55,29 @@ def test_string_boolean_coerced():
     assert fixed.arguments["replace_all"] is False
 
 
+def test_wrapped_quotes_stripped_from_path_args():
+    # live regression 2026-07-11 (session fee3e2f8): four Read calls went out
+    # with file_path='"/home/.../CMakeLists.txt"' — literal quotes inside the
+    # value — and failed client-side; the model noticed ("the Read tool seems
+    # to be failing") and fell back to Bash cat. Only path-like keys are
+    # stripped: content-bearing strings (old_string/new_string) can be
+    # legitimately fully quoted code fragments.
+    call = ToolCall("t1", "Read", {"file_path": '"/home/azeroth/x/CMakeLists.txt"'})
+    fixed, err = repair_toolcall(call, TOOLS)
+    assert err is None
+    assert fixed.arguments["file_path"] == "/home/azeroth/x/CMakeLists.txt"
+
+
+def test_quoted_content_strings_left_alone():
+    call = ToolCall("t1", "Edit", {
+        "file_path": "/x", "old_string": '"exact quoted fragment"',
+        "new_string": '"new quoted fragment"',
+    })
+    fixed, err = repair_toolcall(call, EDIT_TOOLS)
+    assert err is None
+    assert fixed.arguments["old_string"] == '"exact quoted fragment"'
+
+
 def test_string_number_coerced():
     call = ToolCall("t1", "Read", {"file_path": "/x", "limit": "25"})
     fixed, err = repair_toolcall(call, TOOLS)

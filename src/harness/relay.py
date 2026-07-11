@@ -242,14 +242,10 @@ def _surface_tool(conv: Conversation, name: str) -> Conversation | None:
 
 
 def _state_allows_tool(name: str, action_state, settings: Settings) -> bool:
-    if not action_state.allowed_tools:
-        return True
-    if name in action_state.allowed_tools:
-        return True
-    # Skill is a local meta-tool that injects instructions, not a workspace
-    # action. Keep it available for the skill compiler without opening other
-    # hidden tools that the current state did not surface.
-    return name == "Skill" and settings.skills.enabled
+    # Subtractive by spec (2026-07-11-default-open-enforcement): a state names
+    # the tools it blocks; everything else — including client tools this
+    # codebase has never heard of — passes.
+    return name not in action_state.blocked_tools
 
 
 def _record_preflight(metrics: dict, call: ToolCall, decision) -> None:
@@ -340,7 +336,7 @@ async def run(
         m["action_state_reason"] = action_state.reason
         state_available_tools = [
             tool.name for tool in conv.tools
-            if not action_state.allowed_tools or tool.name in action_state.allowed_tools
+            if tool.name not in action_state.blocked_tools
         ]
         effective_requires_tool = action_state.requires_tool and bool(state_available_tools)
         payload_conv = shape_tools_for_state(conv, action_state)
@@ -480,8 +476,9 @@ async def run(
                             break
                         m["invalid_calls"] += 1
                         yield TextDelta(
-                            f"\n[action state denied {fixed.name}: expected "
-                            f"{', '.join(action_state.allowed_tools)}]\n"
+                            f"\n[action state denied {fixed.name}: the "
+                            f"{action_state.name} state blocks "
+                            f"{', '.join(action_state.blocked_tools)}]\n"
                         )
                         continue
                     seen = _repeat_count(conv, fixed)
