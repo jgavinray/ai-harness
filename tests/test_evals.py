@@ -135,6 +135,7 @@ def test_all_tasks_complete_and_checkers_valid():
     assert names == {
         "fix-test", "add-endpoint", "rename-refactor", "find-and-report",
         "multi-step", "tool-discovery", "long-horizon", "code-review",
+        "review-fanout",
     }
     for task in TASKS.iterdir():
         assert (task / "prompt.txt").exists(), task
@@ -180,6 +181,19 @@ def test_code_review_task_plants_uncommitted_defect(tmp_path):
     )
     r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_review_fanout_task_demands_subagents():
+    # live regression 2026-07-11 (sessions fee3e2f8, 6993e8ca): "use a
+    # minimum of 4 sub agents" review sessions were strangled by action-state
+    # Agent denials. The family reproduces the workload shape: same planted
+    # defect as code-review, but the prompt requires subagent delegation.
+    task = TASKS / "review-fanout"
+    prompt = (task / "prompt.txt").read_text()
+    assert "subagent" in prompt.lower()
+    assert (task / "setup.sh").exists()
+    billing = (task / "pending_changes" / "billing.py").read_text()
+    assert "subtotal + discount" in billing  # the planted defect
 
 
 def test_runner_allows_skill_tool_for_skill_compiler_eval():
