@@ -268,6 +268,31 @@ async def test_reviewer_error_fails_open(tmp_path):
     assert outcome.events == candidate()
 
 
+async def test_verdict_parsing_tolerates_preamble_and_markdown(tmp_path):
+    # Live shadow round 1 (2026-07-19): qwen27 prefaced its verdict with
+    # prose, so a first-word-only parse read every reply as malformed and
+    # blinded the sensor. The parser must find the first keyword-led line.
+    from harness.debate import _parse_verdict
+    assert _parse_verdict("Looking at the response:\n\nAPPROVE")[0] == "approve"
+    assert _parse_verdict("**OBJECTION:**\n1. No evidence.") == ("objection", "1. No evidence.")
+    assert _parse_verdict("I checked the claims.\n- OBJECTION: unsupported.")[0] == "objection"
+    assert _parse_verdict("The response looks fine to me.")[0] == "malformed"
+
+
+async def test_malformed_round_logs_raw_reply(tmp_path):
+    reviewer = ScriptedBackend("rev", [script("The response looks fine to me.")])
+    pool = FakePool({"review": [reviewer]})
+    manager = make_manager(tmp_path)
+    await manager.run(
+        make_conv(), candidate(), pool, {},
+        session_key="s", parent_request_id="r",
+    )
+    rows = reviews_records(tmp_path)
+    bad = next(r for r in rows if r["kind"] == "debate_round")
+    assert bad["verdict"] == "malformed"
+    assert "looks fine to me" in bad["raw_reply"]
+
+
 async def test_malformed_verdict_fails_open(tmp_path):
     reviewer = ScriptedBackend("rev", [script("Well, it depends on the file.")])
     pool = FakePool({"review": [reviewer]})

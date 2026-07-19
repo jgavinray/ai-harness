@@ -148,25 +148,34 @@ def _is_prose_only(events: list[IREvent]) -> bool:
     return not any(isinstance(e, ToolCall) for e in events)
 
 
+_VERDICT_KINDS = {
+    "APPROVE": "approve",
+    "FLAG": "flag",
+    "OBJECTION": "objection",
+    "CONCEDE": "concede",
+    "REBUT": "rebut",
+}
+
+
 def _parse_verdict(text: str) -> tuple[str, str]:
     """Returns (kind, body): approve | flag | objection | concede | rebut |
-    malformed. body is the text after the keyword."""
-    stripped = text.strip()
-    if not stripped:
-        return ("malformed", "")
-    first = stripped.split(None, 1)[0]
-    keyword = first.rstrip(":").upper()
-    body = stripped[len(first):].lstrip(" :\n")
-    kinds = {
-        "APPROVE": "approve",
-        "FLAG": "flag",
-        "OBJECTION": "objection",
-        "CONCEDE": "concede",
-        "REBUT": "rebut",
-    }
-    if keyword not in kinds:
-        return ("malformed", stripped)
-    return (kinds[keyword], body)
+    malformed. Models preface and decorate their verdict (live shadow round
+    2026-07-19), so the keyword is taken from the first line that LEADS with
+    one — never from a mere mention inside prose — and body is everything
+    after it."""
+    for line in text.splitlines():
+        candidate_line = line.strip().lstrip("*#->• ").rstrip("*")
+        if not candidate_line:
+            continue
+        first = candidate_line.split(None, 1)[0]
+        keyword = first.rstrip(":*").upper()
+        if keyword in _VERDICT_KINDS:
+            offset = text.index(line) + len(line)
+            inline = candidate_line[len(first):].lstrip(" :*\n")
+            rest = text[offset:].lstrip(" :\n")
+            body = "\n".join(part for part in (inline, rest) if part)
+            return (_VERDICT_KINDS[keyword], body)
+    return ("malformed", text.strip())
 
 
 class DebateManager:
@@ -249,6 +258,7 @@ class DebateManager:
                     metrics, start, session_key, parent_request_id,
                 )
             if verdict == "malformed":
+                round_record["raw_reply"] = body[:600]  # sensor: mine these to fix the protocol prompt
                 self._log(round_record)
                 metrics["debate_error"] = "malformed_verdict"
                 return self._finish(
