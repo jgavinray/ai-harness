@@ -168,7 +168,7 @@ def _parse_verdict(text: str) -> tuple[str, str]:
         if not candidate_line:
             continue
         first = candidate_line.split(None, 1)[0]
-        keyword = first.rstrip(":*").upper()
+        keyword = first.rstrip(":*.,!").upper()
         if keyword in _VERDICT_KINDS:
             offset = text.index(line) + len(line)
             inline = candidate_line[len(first):].lstrip(" :*\n")

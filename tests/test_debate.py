@@ -277,6 +277,10 @@ async def test_verdict_parsing_tolerates_preamble_and_markdown(tmp_path):
     assert _parse_verdict("**OBJECTION:**\n1. No evidence.") == ("objection", "1. No evidence.")
     assert _parse_verdict("I checked the claims.\n- OBJECTION: unsupported.")[0] == "objection"
     assert _parse_verdict("The response looks fine to me.")[0] == "malformed"
+    # Live round msg_7307a3f2 (2026-07-19): the counter replied "CONCEDE."
+    # and the trailing period made the parse read it as malformed→rebut.
+    assert _parse_verdict("CONCEDE. The history has no such evidence.")[0] == "concede"
+    assert _parse_verdict("APPROVE.")[0] == "approve"
 
 
 async def test_malformed_round_logs_raw_reply(tmp_path):
