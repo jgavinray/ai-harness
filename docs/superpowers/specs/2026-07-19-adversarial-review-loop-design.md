@@ -128,10 +128,12 @@ to deterministic guard rules. JSONL remains the source of truth (Law 5).
 
 ### Config
 
-`[review]` (extending the existing section): `mode`, `scope = "all_turns"`,
-`client_deadline_s`, `max_tokens` (per review inference),
-`keepalive_interval_s`. Reviewer backend selection stays role-based
-(`review` role on qwen27 now; movable by config alone).
+`[review]` (extending the existing section): `mode`, `debate_roles`,
+`client_deadline_s`, `keepalive_interval_s`, `reviews_dir`. The debate has
+**no token limits of its own** (owner decision 2026-07-19): each reviewer /
+counter-review inference inherits the `max_tokens` the client requested for
+the turn. Reviewer backend selection stays role-based (`review` role on
+qwen27 now; movable by config alone).
 
 ### Rollout (Law 1)
 

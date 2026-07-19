@@ -126,6 +126,20 @@ class ReviewCfg(BaseModel):
         "loop_break",
         "invalid_tool_retry",
     ]
+    # Adversarial review debate (spec 2026-07-19-adversarial-review-loop):
+    # shadow = full debate runs and logs but the original response always
+    # ships; enforce = the consensus candidate ships. Termination is
+    # consensus or a pathology valve — never a round cap.
+    mode: Literal["off", "shadow", "enforce"] = "off"
+    # Every session-visible turn is debated; only "fast" utility calls
+    # (titles, summaries — response-cached) are excluded.
+    debate_roles: list[str] = ["main", "subagent", "reasoning"]
+    # Ship the current best candidate when the debate's wall-clock nears the
+    # client's willingness to wait; an aborted CLI request is worse than an
+    # imperfect answer.
+    client_deadline_s: float = 240.0
+    keepalive_interval_s: float = 15.0
+    reviews_dir: str = "logs/reviews"
 
 
 class CriticCfg(BaseModel):

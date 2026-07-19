@@ -7,6 +7,7 @@ import gate_health  # noqa: E402
 import lora_train  # noqa: E402
 import promote_candidate  # noqa: E402
 import relax_scaffold  # noqa: E402
+import review_patterns  # noqa: E402
 import shadow_eval  # noqa: E402
 
 
@@ -178,3 +179,62 @@ def test_relax_scaffold_gate_and_config_edit(tmp_path):
     )
     relax_scaffold.relax_config(cfg, "m", "guard_edit_without_read")
     assert 'relaxed = ["guard_edit_without_read"]' in cfg.read_text()
+
+
+def test_review_patterns_groups_recurring_objections(tmp_path):
+    # Spec 2026-07-19 (adversarial review loop): the debate is a sensor; the
+    # nightly job groups recurring objection shapes so they can graduate
+    # into deterministic guard rules.
+    reviews = tmp_path / "reviews"
+    reviews.mkdir()
+    rows = [
+        {"kind": "debate_round", "round": 1, "verdict": "objection", "counter": "concede",
+         "objection": "1. The claim 'tests pass' cites no tool evidence.",
+         "session_key": "a", "parent_request_id": "r1"},
+        {"kind": "debate_round", "round": 1, "verdict": "objection", "counter": "rebut",
+         "objection": "1. The claim 'the bug is in parse()' cites no tool evidence.",
+         "session_key": "b", "parent_request_id": "r2"},
+        {"kind": "debate_round", "round": 2, "verdict": "objection", "counter": None,
+         "objection": "1. The response answers a different question than asked.",
+         "session_key": "b", "parent_request_id": "r2"},
+        {"kind": "debate_round", "round": 3, "verdict": "approve", "counter": None,
+         "session_key": "a", "parent_request_id": "r1"},
+        {"kind": "debate", "outcome": "deadlock", "rounds": 3,
+         "unresolved_objection": "1. The claim 'tests pass' cites no tool evidence.",
+         "session_key": "b", "parent_request_id": "r2"},
+        {"kind": "debate", "outcome": "consensus", "rounds": 2,
+         "session_key": "a", "parent_request_id": "r1"},
+    ]
+    (reviews / "2026-07-19.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n"
+    )
+    report = review_patterns.scan_day(reviews / "2026-07-19.jsonl")
+    assert report["rounds"] == 4
+    assert report["debates"] == 2
+    assert report["outcomes"] == {"deadlock": 1, "consensus": 1}
+    top = report["patterns"][0]
+    # the two 'cites no tool evidence' objections differ only in the quoted
+    # claim, so they group under one signature
+    assert top["count"] == 2
+    assert "cites no tool evidence" in top["signature"]
+    assert len(report["patterns"]) == 2
+
+
+def test_review_patterns_writes_dated_report(tmp_path):
+    reviews = tmp_path / "reviews"
+    reviews.mkdir()
+    (reviews / "2026-07-19.jsonl").write_text(json.dumps(
+        {"kind": "debate", "outcome": "consensus", "rounds": 1, "session_key": "a"}
+    ) + "\n")
+    out = tmp_path / "patterns"
+    rc = review_patterns.main([
+        "--reviews-dir", str(reviews), "--out-dir", str(out), "--date", "2026-07-19",
+    ])
+    assert rc == 0
+    report = json.loads((out / "2026-07-19.json").read_text())
+    assert report["date"] == "2026-07-19"
+    assert report["debates"] == 1
+    # a missing day is not an error: report-only jobs never fail the flywheel
+    assert review_patterns.main([
+        "--reviews-dir", str(reviews), "--out-dir", str(out), "--date", "2026-01-01",
+    ]) == 0

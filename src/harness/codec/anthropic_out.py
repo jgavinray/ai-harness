@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import AsyncIterator
 
-from harness.ir import Done, IREvent, TextDelta, ThinkingDelta, ToolCall
+from harness.ir import Done, IREvent, Ping, TextDelta, ThinkingDelta, ToolCall
 
 
 def _ev(name: str, data: dict) -> str:
@@ -116,6 +116,8 @@ async def stream_sse(
                 {"type": "input_json_delta", "partial_json": json.dumps(ev.arguments)}
             )
             yield st.close()
+        elif isinstance(ev, Ping):
+            yield _ev("ping", {"type": "ping"})
         elif isinstance(ev, Done):
             stop_reason = ev.stop_reason
             usage = _usage(ev)

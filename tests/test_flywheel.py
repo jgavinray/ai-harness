@@ -102,11 +102,17 @@ def test_nightly_jobs_follow_settings(tmp_path):
     assert "--include-live" in jobs["corpus"]
     assert any("analytics.py" in a for a in jobs["analytics"])
     assert any("gate_health.py" in a for a in jobs["gate_health"])
+    s.review.mode = "shadow"
+    jobs = dict(nightly_jobs(s))
+    assert any("review_patterns.py" in a for a in jobs["review_patterns"])
+    assert s.review.reviews_dir in jobs["review_patterns"]
+    s.review.mode = "off"
     s.memory.enabled = False
     s.traces.layout = "sessions"
     jobs = dict(nightly_jobs(s))
     assert "memory_distill" not in jobs
     assert "gate_health" not in jobs
+    assert "review_patterns" not in jobs
     assert "traces/sessions.jsonl" in jobs["corpus"]
 
 

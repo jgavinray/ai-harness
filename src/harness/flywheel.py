@@ -120,6 +120,14 @@ def nightly_jobs(settings: Settings) -> list[tuple[str, list[str]]]:
         jobs.append(("gate_health", [
             py, "scripts/gate_health.py", "--traces-dir", settings.traces.dir,
         ]))
+    if settings.review.mode != "off":
+        # Spec 2026-07-19 (adversarial review loop): the debate is a sensor;
+        # recurring objection shapes graduate into deterministic guard rules.
+        jobs.append(("review_patterns", [
+            py, "scripts/review_patterns.py",
+            "--reviews-dir", settings.review.reviews_dir,
+            "--out-dir", "logs/review_patterns",
+        ]))
     if Path(settings.skills.dir).expanduser().is_dir():
         jobs.append(("compile_skills", [
             py, "scripts/compile_skills.py",

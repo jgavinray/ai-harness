@@ -15,10 +15,11 @@ base_url = "http://192.168.0.196:8000/v1"
 model = "qwen3.6-27b"
 profile = "qwen"
 context_window = 262144
-# Same role surface the certified eval backend had (single-backend default).
-# plan/review/critic roles are deliberately absent: the 140/140 runs never
-# exercised those side-channels, so enabling them here would be unmeasured.
-roles = ["main", "subagent", "fast"]
+# Same role surface the certified eval backend had (single-backend default),
+# plus "review" for the adversarial debate sensor (spec 2026-07-19; shadow
+# mode only — zero response mutation, so the certified serving behavior is
+# unchanged). plan/critic roles stay absent: unmeasured side-channels.
+roles = ["main", "subagent", "fast", "review"]
 max_in_flight = 2
 
 #[[backends]]
@@ -77,7 +78,14 @@ enabled = true   # compiler no-ops unless the skills dir exists, as in the eval 
 enabled = true
 
 [review]
-enabled = true   # no review/plan-role backend today -> skipped, exactly as in the eval runs
+enabled = true   # trigger-based review path; inert unless a guard fires
+# Adversarial debate sensor (spec 2026-07-19-adversarial-review-loop):
+# shadow = the full reviewer/counter-review debate runs on every
+# main/subagent/reasoning turn and logs rounds to logs/reviews/, but the
+# original response ALWAYS ships — zero behavior change to certified
+# serving. enforce (consensus candidate ships) only after the envelope +
+# groundedness eval delta.
+mode = "shadow"
 
 # critic and reasoning_budget stay at their defaults (disabled): the 140/140
 # certification ran without them. Re-enable only behind an eval delta.

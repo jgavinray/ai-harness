@@ -100,4 +100,10 @@ class Done:
     cached_tokens: int = 0  # prefix tokens served from the backend's KV cache
 
 
-IREvent = Union[TextDelta, ThinkingDelta, ToolCall, Done]
+@dataclass(frozen=True)
+class Ping:
+    """SSE keepalive: emitted while the harness works between backend events
+    (e.g. an adversarial review debate) so the client's stream never idles."""
+
+
+IREvent = Union[TextDelta, ThinkingDelta, ToolCall, Done, Ping]

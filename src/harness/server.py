@@ -29,7 +29,8 @@ from harness.codec.anthropic_in import decode
 from harness.codec.anthropic_out import collect, error_body, error_sse, stream_sse
 from harness.config import Settings, load_settings
 from harness.critic import CriticManager
-from harness.ir import Done, ThinkingDelta, ToolResultPart
+from harness.debate import DebateManager
+from harness.ir import Done, Ping, ThinkingDelta, ToolResultPart
 from harness.log import RequestLogger
 from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
 from harness.planning import PlanningManager
@@ -661,6 +662,12 @@ def create_app(
     planner = PlanningManager(settings)
     reviewer = ReviewManager(settings)
     critic = CriticManager(settings)
+    debates = DebateManager(
+        settings,
+        RequestLogger(None, directory=settings.review.reviews_dir)
+        if settings.review.mode != "off" else None,
+    )
+    shadow_debates: set[asyncio.Task] = set()  # keep-alive refs for fire-and-forget tasks
     research = ResearchManager(settings)
     pending_preflight: dict[tuple[str, str], dict] = {}
     stats_state_path = _stats_state_path(log_source)
@@ -912,6 +919,30 @@ def create_app(
                 body=body,
             )
 
+        debate_mode = req_settings.review.mode
+        debate_active = (
+            debate_mode in ("shadow", "enforce")
+            and role in req_settings.review.debate_roles
+            and cached_events is None
+        )
+
+        async def _regenerate(regen_conv):
+            regen_metrics: dict = {}
+            return [
+                ev async for ev in relay.run(
+                    regen_conv, chosen.profile, chosen, req_settings,
+                    metrics=regen_metrics, role=role, body=body,
+                )
+            ]
+
+        if debate_active and debate_mode == "enforce":
+            events = debates.enforce_stream(
+                events, conv, pool, metrics,
+                backend=chosen, regenerate=_regenerate,
+                session_key=skey, parent_request_id=msg_id,
+                account_usage=account_usage,
+            )
+
         buffer: list = []
 
         async def _instrument(evs):
@@ -932,7 +963,11 @@ def create_app(
                         metrics.get("reasoning_tokens_observed", 0)
                         + counter.count_text(ev.text)
                     )
-                if (cache_key and cached_events is None) or settings.traces.enabled:
+                if not isinstance(ev, Ping) and (
+                    (cache_key and cached_events is None)
+                    or settings.traces.enabled
+                    or (debate_active and debate_mode == "shadow")
+                ):
                     buffer.append(ev)
                 yield ev
 
@@ -968,6 +1003,32 @@ def create_app(
                 except RuntimeError:
                     pass
             logger.write(record)
+            if debate_active and debate_mode == "shadow" and buffer:
+                candidate = list(buffer)
+
+                async def _shadow_debate():
+                    try:
+                        await debates.run(
+                            conv, candidate, pool, {},
+                            backend=chosen, regenerate=_regenerate,
+                            session_key=skey, parent_request_id=msg_id,
+                            account_usage=account_usage, original_shipped=True,
+                        )
+                    except Exception as exc:
+                        logger.write({
+                            "kind": "sidecar",
+                            "sidecar_type": "debate_error",
+                            "parent_request_id": msg_id,
+                            "session_key": skey,
+                            "error": str(exc),
+                        })
+
+                try:
+                    task = asyncio.get_running_loop().create_task(_shadow_debate())
+                    shadow_debates.add(task)
+                    task.add_done_callback(shadow_debates.discard)
+                except RuntimeError:
+                    pass
 
         if conv.params.stream:
             async def sse():
