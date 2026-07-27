@@ -1,0 +1,12 @@
+{
+  "_comment": "Template — replace with real servers. Credentials MUST use ${ENV_VAR} interpolation, never literals. Document required vars in .env.example.",
+  "mcpServers": {
+    "example-server": {
+      "command": "example-mcp",
+      "args": ["--endpoint", "${EXAMPLE_MCP_ENDPOINT}"],
+      "env": {
+        "EXAMPLE_MCP_TOKEN": "${EXAMPLE_MCP_TOKEN}"
+      }
+    }
+  }
+}

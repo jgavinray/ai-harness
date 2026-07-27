@@ -1,0 +1,24 @@
+# Sensors on every push: tests, lint, types, format — the agent's work re-verified.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  sensors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install sensors
+        run: pip install ruff pyright pytest pre-commit
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Type check
+        run: pyright
+      - name: Tests / project gate
+        run: |
+          if [ -x .claude/verify.sh ]; then .claude/verify.sh; else pytest -q; fi

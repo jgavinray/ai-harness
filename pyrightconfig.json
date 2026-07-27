@@ -1,0 +1,7 @@
+{
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.12",
+  "reportMissingImports": true,
+  "reportUnusedVariable": "error",
+  "exclude": ["**/__pycache__", ".venv", "node_modules"]
+}

@@ -1,15 +1,3 @@
-.DS_Store
-.venv/
-__pycache__/
-*.egg-info/
-debug_dumps/
-.pytest_cache/
-logs/
-evals/results/
-evals/generated/
-traces/
-corpus.jsonl
-harness.duckdb
 .env
 .env.*
 *.pem

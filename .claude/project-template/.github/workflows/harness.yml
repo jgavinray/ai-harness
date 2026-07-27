@@ -1,0 +1,18 @@
+# The ratchet: maturity only goes up. Fails the build if the harness regresses below L4.
+name: Harness Score
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: write
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Harness gate (L4)
+        run: npx -y harness-score --min-level 4
+      - name: Badge
+        if: github.ref == 'refs/heads/main'
+        run: npx -y harness-score --badge harness-badge.svg || true

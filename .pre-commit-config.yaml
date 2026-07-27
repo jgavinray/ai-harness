@@ -1,0 +1,25 @@
+# Earliest feedback loop: fast checks before a commit exists.
+# Install: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-json
+      - id: check-yaml
+      - id: detect-private-key
+  - repo: local
+    hooks:
+      - id: verify-quick
+        name: node/project verify (quick)
+        entry: bash -c '[ -x .claude/verify.sh ] && .claude/verify.sh || true'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

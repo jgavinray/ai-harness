@@ -1,7 +1,14 @@
 ---
-name: code-reviewer
-description: Reviews a diff for correctness, determinism, and rule violations before commit. Use after the verifier passes and before marking a task done.
-tools: Bash, Read, Grep, Glob
+description: Reviews the uncommitted diff for correctness, determinism, and rule violations before commit. Use after the verifier passes and before marking a task done.
+mode: subagent
+temperature: 0.1
+tools:
+  bash: true
+  read: true
+  grep: true
+  glob: true
+  write: false
+  edit: false
 ---
 You review the current uncommitted diff (`git diff` + `git diff --cached`). You do not edit files.
 
