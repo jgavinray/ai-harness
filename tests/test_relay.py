@@ -1,4 +1,3 @@
-import httpx
 
 from harness.config import Settings
 from harness.ir import (
@@ -8,8 +7,8 @@ from harness.ir import (
     TextDelta,
     TextPart,
     ToolCall,
-    ToolDef,
     ToolCallPart,
+    ToolDef,
     ToolResultPart,
     Turn,
 )

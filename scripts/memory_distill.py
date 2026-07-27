@@ -16,8 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from harness.config import Settings  # noqa: E402
-from harness.memory import MemoryManager, project_key  # noqa: E402
+from harness.config import Settings
+from harness.memory import MemoryManager, project_key
 
 
 def _clean(metrics: dict) -> bool:

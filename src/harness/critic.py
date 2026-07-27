@@ -15,7 +15,16 @@ from fnmatch import fnmatch
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart, Turn
+from harness.ir import (
+    Conversation,
+    Done,
+    TextDelta,
+    TextPart,
+    ThinkingDelta,
+    ToolCallPart,
+    ToolResultPart,
+    Turn,
+)
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
@@ -105,7 +114,7 @@ class CriticManager:
                     thinking += ev.text
                 elif isinstance(ev, Done):
                     done = ev
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             metrics["critic_error"] = str(exc)
             return conv
         feedback = _feedback(text)
@@ -288,7 +297,7 @@ def _feedback(text: str) -> str:
     if not stripped:
         return ""
     lowered = stripped.lower()
-    if lowered.startswith("approve") or lowered.startswith("no-op") or lowered == "ok":
+    if lowered.startswith(("approve", "no-op")) or lowered == "ok":
         return ""
     return text
 

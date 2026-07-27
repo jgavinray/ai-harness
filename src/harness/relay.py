@@ -11,12 +11,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
-from typing import AsyncIterator, Awaitable, Callable
 
 from harness.action_state import current_action_state, shape_tools_for_state
 from harness.backends.base import Backend
 from harness.config import Settings
+from harness.guards import (
+    guard_done_claim,
+    guard_metrics,
+    guard_tool_call,
+    has_unverified_edit,
+    increment_guard,
+    preflight_tool_call,
+)
 from harness.ir import (
     Conversation,
     Done,
@@ -28,19 +36,11 @@ from harness.ir import (
     ToolCallPart,
     Turn,
 )
-from harness.guards import (
-    guard_done_claim,
-    guard_metrics,
-    guard_tool_call,
-    has_unverified_edit,
-    increment_guard,
-    preflight_tool_call,
-)
-from harness.skills import SkillCompiler, skill_name
 from harness.profiles.base import Profile
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.repair.degenerate import DegenerateDetector
 from harness.repair.toolcalls import repair_toolcall
+from harness.skills import SkillCompiler, skill_name
 
 ReviewCallback = Callable[[str, Conversation, str, dict], Awaitable[str | None]]
 
@@ -181,7 +181,7 @@ async def _iter_with_idle_timeout(stream, timeout_s: float):
                 ev = await it.__anext__()
         except StopAsyncIteration:
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield _STALLED
             return
         yield ev

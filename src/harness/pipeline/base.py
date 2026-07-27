@@ -1,5 +1,6 @@
+from collections.abc import Sequence
 from inspect import signature
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from harness.config import Settings
 from harness.ir import Conversation

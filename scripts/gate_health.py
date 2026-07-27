@@ -76,7 +76,7 @@ def write_report(day_dir: Path, out_dir: Path) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--traces-dir", required=True)
-    ap.add_argument("--date", default=date.today().isoformat())
+    ap.add_argument("--date", default=date.today().isoformat())  # noqa: DTZ011
     ap.add_argument("--out-dir", default="logs/gate_health")
     args = ap.parse_args()
     day_dir = Path(args.traces_dir) / args.date

@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from harness.config import Settings, load_settings
@@ -46,7 +46,7 @@ def prune_partitions(
     """Delete date-named partitions older than the cutoff. Anything not
     matching YYYY-MM-DD (legacy files, sessions.jsonl) is never touched."""
     cutoff = (
-        datetime.fromtimestamp(now if now is not None else time.time())
+        datetime.fromtimestamp(now if now is not None else time.time(), tz=UTC)
         - timedelta(days=days)
     ).strftime("%Y-%m-%d")
     removed: list[str] = []
@@ -67,11 +67,11 @@ def run_job(name: str, argv: list[str], cwd: Path, logger: RequestLogger) -> dic
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            argv, cwd=cwd, capture_output=True, text=True, timeout=JOB_TIMEOUT_S
+            argv, cwd=cwd, capture_output=True, text=True, timeout=JOB_TIMEOUT_S, check=False
         )
         rc = proc.returncode
         output = (proc.stdout + proc.stderr)[-OUTPUT_TAIL_CHARS:]
-    except Exception as exc:  # job isolation: a broken job must not kill the loop
+    except Exception as exc:  # noqa: BLE001 job isolation: a broken job must not kill the loop
         rc = -1
         output = str(exc)[-OUTPUT_TAIL_CHARS:]
     record = {
@@ -181,8 +181,8 @@ def check_training_due(settings: Settings, logger: RequestLogger) -> None:
     commands = [
         f"{py} scripts/qlora_train.py --model {base} --data {fly.corpus_path} --out {adapter}",
         f"{py} scripts/shadow_eval.py --execute",
-        f"{py} scripts/promote_candidate.py --results <shadow results> --config harness.toml "
-        "--incumbent <main model> --candidate <candidate model> --backend-name <candidate>",
+        (f"{py} scripts/promote_candidate.py --results <shadow results> --config harness.toml "
+         f"--incumbent <main model> --candidate <candidate model> --backend-name <candidate>"),
     ]
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({"ts": time.time(), "corpus_rows": rows}))
@@ -198,7 +198,7 @@ def check_training_due(settings: Settings, logger: RequestLogger) -> None:
 
 def sentinel_verdicts(results_path: Path) -> dict[str, str]:
     sys.path.insert(0, str(Path.cwd() / "evals"))
-    import report as eval_report  # noqa: E402
+    import report as eval_report
 
     tasks = eval_report.aggregate_tasks(eval_report.load(results_path))
     return {key[2]: metrics["verdict"] for key, metrics in tasks.items()}
@@ -245,11 +245,11 @@ async def run_loop(settings: Settings, cwd: Path) -> None:
     fly = settings.flywheel
     logger = RequestLogger(fly.log_path)
     while True:
-        now = datetime.now()
+        now = datetime.now(UTC)
         nxt = next_nightly(now, fly.nightly_hour)
         await asyncio.sleep(max(1.0, (nxt - now).total_seconds()))
         await asyncio.to_thread(nightly_cycle, settings, logger, cwd)
-        if fly.sentinel_weekday >= 0 and datetime.now().weekday() == fly.sentinel_weekday:
+        if fly.sentinel_weekday >= 0 and datetime.now(UTC).weekday() == fly.sentinel_weekday:
             await asyncio.to_thread(sentinel_cycle, settings, logger, cwd)
 
 

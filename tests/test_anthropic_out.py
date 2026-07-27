@@ -42,7 +42,7 @@ async def test_stream_sequence():
         d["delta"]["partial_json"] for d in deltas if d["delta"]["type"] == "input_json_delta"
     )
     assert json.loads(tool_json) == {"file_path": "/x"}
-    md = [d for n, d in evs if n == "message_delta"][0]
+    md = next(d for n, d in evs if n == "message_delta")
     assert md["delta"]["stop_reason"] == "tool_use"
     assert md["usage"]["output_tokens"] == 5
     assert names[-1] == "message_stop"
@@ -79,5 +79,5 @@ async def test_text_only_stream_ends_end_turn():
 
     raw = "".join([s async for s in stream_sse(evs(), "m", "msg_3")])
     parsed = parse_sse(raw)
-    md = [d for n, d in parsed if n == "message_delta"][0]
+    md = next(d for n, d in parsed if n == "message_delta")
     assert md["delta"]["stop_reason"] == "end_turn"

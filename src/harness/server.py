@@ -32,11 +32,12 @@ from harness.critic import CriticManager
 from harness.debate import DebateManager
 from harness.ir import Done, Ping, ThinkingDelta, ToolResultPart
 from harness.log import RequestLogger
-from harness.memory import MemoryManager, MemoryStage, injected_memory_tokens, project_key
-from harness.planning import PlanningManager
-from harness.review import ReviewManager
-from harness.research import ResearchManager, memory_fact
-from harness.reasoning_budget import apply_reasoning_budget
+from harness.memory import (
+    MemoryManager,
+    MemoryStage,
+    injected_memory_tokens,
+    project_key,
+)
 from harness.pipeline.base import run_pipeline
 from harness.pipeline.fewshot import FewshotStage
 from harness.pipeline.history import HistoryStage
@@ -44,6 +45,10 @@ from harness.pipeline.path_canon import PathCanonStage
 from harness.pipeline.system_prompt import SystemPromptStage
 from harness.pipeline.tool_prune import ToolPruneStage
 from harness.pipeline.tool_schema import ToolSchemaStage
+from harness.planning import PlanningManager
+from harness.reasoning_budget import apply_reasoning_budget
+from harness.research import ResearchManager, memory_fact
+from harness.review import ReviewManager
 from harness.router import Router, request_capabilities, request_role, session_key
 from harness.tokens.counter import HeuristicCounter, count_conversation
 from harness.traces import TraceStore
@@ -157,7 +162,7 @@ def _prometheus_first_value(text: str, metric: str) -> float | None:
     for line in text.splitlines():
         if line.startswith("#"):
             continue
-        if line.startswith(metric + "{") or line.startswith(metric + " "):
+        if line.startswith((metric + "{", metric + " ")):
             try:
                 return float(line.rsplit(None, 1)[-1])
             except ValueError:
@@ -171,7 +176,7 @@ def _prometheus_sum(text: str, metric: str) -> float | None:
     for line in text.splitlines():
         if line.startswith("#"):
             continue
-        if line.startswith(metric + "{") or line.startswith(metric + " "):
+        if line.startswith((metric + "{", metric + " ")):
             try:
                 total += float(line.rsplit(None, 1)[-1])
             except ValueError:
@@ -757,7 +762,7 @@ def create_app(
     async def messages(request: Request):
         try:
             body = await request.json()
-        except Exception:
+        except (ValueError, TypeError):
             return invalid_request("body is not valid JSON")
         if "messages" not in body or "max_tokens" not in body:
             return invalid_request("'messages' and 'max_tokens' are required")
@@ -835,8 +840,7 @@ def create_app(
             "ttft_ms": None,
         }
         start = time.monotonic()
-        if role in ("main", "reasoning"):
-            if req_settings.research.enabled:
+        if role in ("main", "reasoning") and req_settings.research.enabled:
                 try:
                     brief = await research.ensure(conv, pool, metrics)
                     fact = memory_fact(conv, brief or "")
@@ -846,7 +850,7 @@ def create_app(
                     rendered = chosen.profile.render(conv, chosen.model_name)
                     apply_reasoning_budget(rendered, req_settings, chosen, role, body, conv, metrics)
                     _dump(settings, "rendered-payload", rendered)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     metrics["research_error"] = str(exc)
         if role == "main":
             if req_settings.planning.enabled:
@@ -1014,7 +1018,7 @@ def create_app(
                             session_key=skey, parent_request_id=msg_id,
                             account_usage=account_usage, original_shipped=True,
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001
                         logger.write({
                             "kind": "sidecar",
                             "sidecar_type": "debate_error",
@@ -1059,7 +1063,7 @@ def create_app(
         try:
             body = await request.json()
             conv = decode(body)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return invalid_request(f"could not decode request: {exc!r}")
         return JSONResponse({"input_tokens": count_conversation(conv, counter)})
 

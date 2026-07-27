@@ -4,8 +4,8 @@ import httpx
 import pytest
 
 from harness.backends.base import BackendError
-from harness.backends.pool import BackendPool, PooledBackend
-from harness.config import BackendCfg, PoolBackendCfg, Settings
+from harness.backends.pool import BackendPool
+from harness.config import PoolBackendCfg, Settings
 from harness.router import Router, request_capabilities, request_role, session_key
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
 

@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("duckdb")
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import analytics  # noqa: E402
+import analytics
 
 
 def test_refresh_indexes_partitions_and_legacy_files(tmp_path):

@@ -6,8 +6,6 @@ call cannot be made valid locally; the relay then retries with feedback.
 
 from __future__ import annotations
 
-import json
-
 import json_repair
 import jsonschema
 
@@ -38,13 +36,12 @@ def _coerce_types(args: dict, schema: dict) -> dict:
                 out[key] = float(value) if "." in value else int(value)
             except ValueError:
                 pass
-        elif expected == "string" and key.endswith("path"):
-            # Small models wrap paths in literal quotes and the call still
-            # validates as a string, so the client fails instead (live
-            # 2026-07-11: file_path='"/home/.../CMakeLists.txt"', four Read
-            # failures in a row). Only path-like keys: content-bearing
-            # strings (old_string/new_string) can be legitimately quoted.
-            if (
+        elif expected == "string" and key.endswith("path") and (
+                # Small models wrap paths in literal quotes and the call still
+                # validates as a string, so the client fails instead (live
+                # 2026-07-11: file_path='"/home/.../CMakeLists.txt"', four Read
+                # failures in a row). Only path-like keys: content-bearing
+                # strings (old_string/new_string) can be legitimately quoted.
                 len(value) > 2
                 and value[0] == value[-1]
                 and value[0] in ('"', "'")

@@ -1,5 +1,12 @@
 from harness.config import Settings
-from harness.ir import Conversation, GenParams, TextPart, ToolCallPart, ToolResultPart, Turn
+from harness.ir import (
+    Conversation,
+    GenParams,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+    Turn,
+)
 from harness.pipeline.path_canon import PathCanonStage
 
 BAD = "/work/old-root"

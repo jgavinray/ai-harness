@@ -13,7 +13,7 @@ from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk, tool_chunk
 from tests.test_server import request_body
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import corpus  # noqa: E402
+import corpus
 
 
 def test_event_round_trip_to_assistant_message():

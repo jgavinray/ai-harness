@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from configs import config_matrix, write_configs  # noqa: E402
+from configs import config_matrix, write_configs
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
@@ -46,7 +46,7 @@ def wait_for(url: str, timeout_s: float = 15.0) -> bool:
         try:
             urllib.request.urlopen(url, timeout=2)
             return True
-        except Exception:
+        except OSError:
             time.sleep(0.3)
     return False
 
@@ -117,6 +117,7 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
                 ],
                 cwd=workdir, env=env, capture_output=True, text=True,
                 timeout=timeout_s,
+                check=False,
             )
             answer = proc.stdout
             timed_out = False
@@ -128,7 +129,7 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
         (workdir / "answer.txt").write_text(answer or "")
         check = workdir / "check.sh"
         shutil.copy(task_dir / "check.sh", check)
-        result = subprocess.run(["bash", str(check)], capture_output=True, text=True, timeout=60)
+        result = subprocess.run(["bash", str(check)], capture_output=True, text=True, timeout=60, check=False)
 
         row = {
             "success": result.returncode == 0 and not timed_out,

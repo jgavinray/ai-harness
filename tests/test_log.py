@@ -3,8 +3,8 @@ import re
 
 from harness.config import Settings
 from harness.log import RequestLogger
-from harness.relay import run
 from harness.profiles.registry import get_profile
+from harness.relay import run
 from tests.fake_openai import FakeOpenAI, finish_chunk, tool_chunk
 from tests.test_backends import make
 from tests.test_relay import conv

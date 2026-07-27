@@ -17,11 +17,11 @@ def extract_text_from_block(block: dict) -> str:
     if source.get("type") != "base64" or not source.get("data"):
         return ""
     try:
-        from PIL import Image
         import pytesseract
+        from PIL import Image
 
         data = base64.b64decode(source["data"])
         image = Image.open(BytesIO(data))
         return pytesseract.image_to_string(image).strip()
-    except Exception:
+    except (ImportError, OSError):
         return ""

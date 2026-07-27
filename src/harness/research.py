@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from harness.backends.pool import BackendPool, PooledBackend
+from harness.backends.pool import BackendPool
 from harness.config import Settings
 from harness.ir import Conversation, TextPart
 from harness.research_io import chunks, fetch_source, research_backend, summarize

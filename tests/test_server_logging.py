@@ -5,7 +5,7 @@ import httpx
 from harness.config import Settings
 from harness.server import create_app
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk, tool_chunk
-from tests.test_server import READ_TOOL, request_body
+from tests.test_server import request_body
 
 
 async def post(settings: Settings, fake: FakeOpenAI, body: dict):

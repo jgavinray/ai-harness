@@ -785,12 +785,12 @@ async def test_stats_tracks_vllm_decoded_tokens_and_live_rate():
     from harness.config import PoolBackendCfg
 
     fake = FakeOpenAI()
-    fake.metrics_text = "\n".join([
-        'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
-        'vllm:generation_tokens_total{engine="0",model_name="m"} 1000',
-        'vllm:prompt_tokens_total{engine="0",model_name="m"} 5000',
-        'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3000',
-    ])
+    fake.metrics_text = (
+        'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42\n'
+        'vllm:generation_tokens_total{engine="0",model_name="m"} 1000\n'
+        'vllm:prompt_tokens_total{engine="0",model_name="m"} 5000\n'
+        'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3000\n'
+    )
     settings = Settings()
     settings.backends = [
         PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
@@ -803,12 +803,12 @@ async def test_stats_tracks_vllm_decoded_tokens_and_live_rate():
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
     async with client:
         first = (await client.get("/stats")).json()
-        fake.metrics_text = "\n".join([
-            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
-            'vllm:generation_tokens_total{engine="0",model_name="m"} 1250',
-            'vllm:prompt_tokens_total{engine="0",model_name="m"} 5100',
-            'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3050',
-        ])
+        fake.metrics_text = (
+            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42\n'
+            'vllm:generation_tokens_total{engine="0",model_name="m"} 1250\n'
+            'vllm:prompt_tokens_total{engine="0",model_name="m"} 5100\n'
+            'vllm:prompt_tokens_cached_total{engine="0",model_name="m"} 3050\n'
+        )
         second = (await client.get("/stats")).json()
 
     assert first["vllm_decoded_tokens"] == 1000

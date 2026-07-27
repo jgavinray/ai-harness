@@ -6,7 +6,14 @@ from dataclasses import replace
 from typing import Any
 
 from harness.config import Settings
-from harness.ir import Conversation, TextPart, ThinkingPart, ToolCallPart, ToolResultPart, Turn
+from harness.ir import (
+    Conversation,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolResultPart,
+    Turn,
+)
 
 Aliases = tuple[tuple[str, str], ...]
 
@@ -32,11 +39,7 @@ def _canon_turn(turn: Turn, aliases: Aliases) -> Turn:
     parts = []
     changed = False
     for part in turn.parts:
-        if isinstance(part, TextPart):
-            text = canonicalize_text(part.text, aliases)
-            changed = changed or text != part.text
-            parts.append(replace(part, text=text) if text != part.text else part)
-        elif isinstance(part, ThinkingPart):
+        if isinstance(part, (TextPart, ThinkingPart)):
             text = canonicalize_text(part.text, aliases)
             changed = changed or text != part.text
             parts.append(replace(part, text=text) if text != part.text else part)

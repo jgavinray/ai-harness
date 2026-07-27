@@ -26,7 +26,7 @@ def test_trailing_comma_repaired():
 
 def test_missing_required_param():
     call = ToolCall("t1", "Read", {"limit": 3})
-    fixed, err = repair_toolcall(call, TOOLS)
+    fixed, _ = repair_toolcall(call, TOOLS)
     assert fixed is None
 
 

@@ -1,6 +1,5 @@
 from pipeline import normalize, totals
 
-
 RAW = """
 # name | qty | unit | region
 Widget | 2 | 3.50 | west

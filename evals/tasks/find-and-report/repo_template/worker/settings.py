@@ -11,5 +11,6 @@ def load():
         cfg["pool_size"] = int(override)
     path = os.environ.get("WORKER_CONFIG")
     if path and os.path.exists(path):
-        cfg.update(json.loads(open(path).read()))
+        with open(path) as f:
+            cfg.update(json.loads(f.read()))
     return cfg

@@ -7,7 +7,7 @@ touch wire formats; everything in between operates on these types.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class ToolResultPart:
     is_error: bool = False
 
 
-Part = Union[TextPart, ThinkingPart, ToolCallPart, ToolResultPart]
+Part = TextPart | ThinkingPart | ToolCallPart | ToolResultPart
 
 
 @dataclass(frozen=True)
@@ -106,4 +106,4 @@ class Ping:
     (e.g. an adversarial review debate) so the client's stream never idles."""
 
 
-IREvent = Union[TextDelta, ThinkingDelta, ToolCall, Done, Ping]
+IREvent = TextDelta | ThinkingDelta | ToolCall | Done | Ping

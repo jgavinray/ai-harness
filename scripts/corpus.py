@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from harness.traces import assistant_message  # noqa: E402
+from harness.traces import assistant_message
 
 
 def successful_tags(results_path: Path) -> set[str]:

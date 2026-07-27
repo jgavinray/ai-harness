@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from harness.config import load_settings  # noqa: E402
+from harness.config import load_settings
 
 
 def candidate_commands(config_path: Path, out_dir: str = "evals/results") -> list[str]:
@@ -34,7 +34,7 @@ def run_commands(cmds: list[str], execute: bool) -> list[int]:
         for cmd in cmds:
             print(cmd)
         return []
-    return [subprocess.run(shlex.split(cmd)).returncode for cmd in cmds]
+    return [subprocess.run(shlex.split(cmd), check=False).returncode for cmd in cmds]
 
 
 def main() -> None:

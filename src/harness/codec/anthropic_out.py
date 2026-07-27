@@ -7,7 +7,7 @@ paths — Claude Code must never see a half-open or malformed stream.
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from harness.ir import Done, IREvent, Ping, TextDelta, ThinkingDelta, ToolCall
 

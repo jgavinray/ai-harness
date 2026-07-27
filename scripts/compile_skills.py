@@ -10,8 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from harness.config import Settings  # noqa: E402
-from harness.skills import SkillCompiler  # noqa: E402
+from harness.config import Settings
+from harness.skills import SkillCompiler
 
 
 def main() -> None:

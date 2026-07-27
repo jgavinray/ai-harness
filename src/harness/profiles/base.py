@@ -7,7 +7,8 @@ handling, and (via overrides) anything a family needs differently.
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from harness.ir import (
     Conversation,

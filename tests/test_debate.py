@@ -11,9 +11,9 @@ import json
 
 import httpx
 
+from harness.codec.anthropic_out import collect, stream_sse
 from harness.config import PoolBackendCfg, Settings
 from harness.debate import DebateManager, keepalive_iter
-from harness.codec.anthropic_out import collect, stream_sse
 from harness.ir import (
     Conversation,
     Done,

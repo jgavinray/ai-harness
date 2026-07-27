@@ -12,7 +12,14 @@ from dataclasses import replace
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart
+from harness.ir import (
+    Conversation,
+    Done,
+    TextDelta,
+    TextPart,
+    ThinkingDelta,
+    ToolCallPart,
+)
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter

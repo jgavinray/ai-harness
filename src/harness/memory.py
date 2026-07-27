@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from harness.config import Settings
 from harness.ir import Conversation
@@ -100,7 +100,7 @@ class MemoryManager:
             prompt = EXTRACT_PROMPT.format(transcript=_transcript_tail(messages))
             try:
                 facts = await self.completer([{"role": "user", "content": prompt}])
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue  # extraction is best-effort; never disturb serving
             if facts:
                 self.merge(pkey, facts)

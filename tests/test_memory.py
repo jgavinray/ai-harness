@@ -1,13 +1,20 @@
-from harness.config import Settings
-from harness.ir import Conversation, GenParams
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import memory_distill  # noqa: E402
+from harness.config import Settings
+from harness.ir import Conversation, GenParams
 
-from harness.memory import HEADER, MemoryManager, MemoryStage, injected_memory_tokens, project_key
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import memory_distill
+
+from harness.memory import (
+    HEADER,
+    MemoryManager,
+    MemoryStage,
+    injected_memory_tokens,
+    project_key,
+)
 from harness.tokens.counter import HeuristicCounter
 
 

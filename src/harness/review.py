@@ -6,7 +6,15 @@ import time
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
-from harness.ir import Conversation, Done, TextDelta, ThinkingDelta, TextPart, ToolCallPart, ToolResultPart
+from harness.ir import (
+    Conversation,
+    Done,
+    TextDelta,
+    TextPart,
+    ThinkingDelta,
+    ToolCallPart,
+    ToolResultPart,
+)
 from harness.log import RequestLogger
 from harness.reasoning_budget import apply_reasoning_budget
 from harness.tokens.counter import HeuristicCounter
@@ -88,7 +96,7 @@ class ReviewManager:
                     thinking += ev.text
                 elif isinstance(ev, Done):
                     done = ev
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             metrics["review_error"] = str(exc)
             return None
         feedback = _feedback(text)
@@ -179,7 +187,7 @@ def _feedback(text: str) -> str:
     if not cleaned:
         return ""
     lowered = cleaned.lower()
-    if lowered.startswith("approve") or lowered.startswith("no-op") or lowered == "ok":
+    if lowered.startswith(("approve", "no-op")) or lowered == "ok":
         return ""
     return cleaned[:600]
 

@@ -2,7 +2,7 @@ import httpx
 
 from harness.cache import ResponseCache, payload_key
 from harness.config import Settings
-from harness.ir import Done, TextDelta
+from harness.ir import TextDelta
 from harness.server import create_app
 from tests.fake_openai import FakeOpenAI, finish_chunk, text_chunk
 from tests.test_server import request_body

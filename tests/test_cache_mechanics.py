@@ -3,7 +3,7 @@ import json
 import httpx
 
 from harness.codec.anthropic_out import collect, stream_sse
-from harness.config import BackendCfg, Settings
+from harness.config import BackendCfg
 from harness.ir import Done, TextDelta
 from harness.profiles.registry import get_profile
 from tests.fake_openai import FakeOpenAI, text_chunk
@@ -74,7 +74,7 @@ async def test_collect_usage_cache_read():
 
 async def test_llamacpp_sends_cache_prompt():
     from harness.backends.openai_compat import LlamaCppBackend
-    from tests.fake_openai import FakeOpenAI, finish_chunk
+    from tests.fake_openai import finish_chunk
 
     fake = FakeOpenAI()
     fake.push([finish_chunk("stop")])
@@ -85,7 +85,7 @@ async def test_llamacpp_sends_cache_prompt():
 
 
 def test_history_hysteresis():
-    from harness.pipeline.history import HistoryStage, TARGET_RATIO
+    from harness.pipeline.history import TARGET_RATIO, HistoryStage
     from harness.tokens.counter import count_conversation
     from tests.test_history import big_session, small_settings
 

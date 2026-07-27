@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "evals"))
-import configs as eval_configs  # noqa: E402
-import report as eval_report  # noqa: E402
+import configs as eval_configs
+import report as eval_report
 
 TASKS = Path("evals/tasks")
 
@@ -173,13 +173,13 @@ def test_code_review_task_plants_uncommitted_defect(tmp_path):
     assert len([l for l in diff.splitlines() if l.startswith("+++")]) >= 3
 
     shutil.copy(task / "check.sh", work / "check.sh")
-    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
+    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True, check=False)
     assert r.returncode != 0, "code-review passes its checker without any work"
     (work / "answer.txt").write_text(
         "The discount is added instead of subtracted.\n"
         "DEFECT: billing.py:apply_discount\n"
     )
-    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
+    r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True, check=False)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -212,5 +212,5 @@ def test_broken_tasks_fail_their_own_checks(tmp_path):
         shutil.copytree(TASKS / name / "repo_template", work)
         shutil.copy(TASKS / name / "check.sh", work / "check.sh")
         subprocess.run(["git", "init", "-q"], cwd=work, check=True)
-        r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True)
+        r = subprocess.run(["bash", "check.sh"], cwd=work, capture_output=True, check=False)
         assert r.returncode != 0, f"{name} passes its checker without any work"

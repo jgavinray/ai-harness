@@ -334,14 +334,14 @@ def _structured_tool_feedback(call: ToolCall, conv: Conversation) -> tuple[str, 
             path = tokens[-1]
         return (
             "use_read_tool",
-            f"Use the Read tool for file inspection instead of Bash {executable}. "
-            f"Call Read with file_path={path!r}.",
+            (f"Use the Read tool for file inspection instead of Bash {executable}. "
+             f"Call Read with file_path={path!r}."),
         )
     if executable in {"grep", "rg"} and _has_tool(conv, "Grep"):
         return (
             "use_grep_tool",
-            "Use the Grep tool for source searches instead of Bash grep/rg. "
-            "Call Grep with the pattern and path arguments.",
+            ("Use the Grep tool for source searches instead of Bash grep/rg. "
+             "Call Grep with the pattern and path arguments."),
         )
     return None
 
@@ -579,7 +579,7 @@ def guard_done_claim(
     if has_unverified_edit(conv) and _done_claim(text):
         return (
             "verify_after_edit",
-            "You changed files but have not run a relevant test or check since the edit. "
-            "Run a verification command now; only claim completion after it passes.",
+            ("You changed files but have not run a relevant test or check since the edit. "
+             "Run a verification command now; only claim completion after it passes."),
         )
     return None

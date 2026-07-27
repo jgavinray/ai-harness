@@ -3,12 +3,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import gate_health  # noqa: E402
-import lora_train  # noqa: E402
-import promote_candidate  # noqa: E402
-import relax_scaffold  # noqa: E402
-import review_patterns  # noqa: E402
-import shadow_eval  # noqa: E402
+import gate_health
+import lora_train
+import promote_candidate
+import relax_scaffold
+import review_patterns
+import shadow_eval
 
 
 def test_shadow_eval_lists_candidate_commands(tmp_path):

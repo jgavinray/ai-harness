@@ -18,9 +18,9 @@ from harness.ir import Conversation
 FINGERPRINTS = ("You are Claude Code", "built on Anthropic's Claude Agent SDK")
 
 # Sections whose content is user/project context and must survive verbatim.
-KEEP = re.compile(r"environment|claude\.?md|memory|project|context|directory structure|git status", re.I)
+KEEP = re.compile(r"environment|claude\.?md|memory|project|context|directory structure|git status", re.IGNORECASE)
 
-SECTION_SPLIT = re.compile(r"^(?=#{1,2} )", re.M)
+SECTION_SPLIT = re.compile(r"^(?=#{1,2} )", re.MULTILINE)
 
 REPLACEMENT = """\
 You are an expert software engineering agent operating inside the Claude Code CLI. \
@@ -67,7 +67,7 @@ The user's latest message defines the only task."""
 
 
 def _compress(text: str) -> str:
-    text = re.sub(r"[ \t]+$", "", text, flags=re.M)
+    text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
     return re.sub(r"\n{3,}", "\n\n", text)
 
 

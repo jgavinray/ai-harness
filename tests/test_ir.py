@@ -29,7 +29,7 @@ def test_conversation_construction():
 
 
 def test_frozen():
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         TextPart("a").text = "b"
 
 

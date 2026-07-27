@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.config import Settings
@@ -16,10 +16,10 @@ from harness.log import RequestLogger
 
 
 def test_next_nightly_rolls_to_tomorrow_when_past():
-    now = datetime(2026, 7, 9, 4, 30)
+    now = datetime(2026, 7, 9, 4, 30, tzinfo=UTC)
     nxt = next_nightly(now, hour=3)
     assert (nxt.day, nxt.hour, nxt.minute) == (10, 3, 0)
-    early = datetime(2026, 7, 9, 1, 0)
+    early = datetime(2026, 7, 9, 1, 0, tzinfo=UTC)
     assert next_nightly(early, hour=3).day == 9
 
 
@@ -35,7 +35,7 @@ def test_prune_partitions_removes_only_dated_entries(tmp_path):
     (traces / "2026-07-09").mkdir()
     (traces / "sessions.jsonl").write_text("{}\n")
 
-    now = datetime(2026, 7, 9).timestamp()
+    now = datetime(2026, 7, 9, tzinfo=UTC).timestamp()
     removed = prune_partitions(requests, traces, days=90, now=now)
     assert (requests / "2026-01-01.jsonl").exists() is False
     assert (requests / "2026-07-09.jsonl").exists()

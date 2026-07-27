@@ -242,7 +242,7 @@ class DebateManager:
                     self._reviewer_conv(conv, candidate_turn, exchange),
                     session_key, account_usage,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 metrics["debate_error"] = str(exc)
                 return self._finish(
                     DebateOutcome("reviewer_error", rounds, original_events if original_shipped else candidate_events),
@@ -283,7 +283,7 @@ class DebateManager:
                     self._counter_conv(conv, candidate_turn, objection),
                     session_key, account_usage,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 metrics["debate_error"] = str(exc)
                 self._log(round_record)
                 return self._finish(

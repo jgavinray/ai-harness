@@ -14,7 +14,8 @@ from pathlib import Path
 
 
 def resolve(args: argparse.Namespace) -> dict:
-    rows = sum(1 for line in Path(args.data).open() if line.strip())
+    with Path(args.data).open() as f:
+        rows = sum(1 for line in f if line.strip())
     return {
         "model": args.model,
         "data": args.data,
@@ -56,16 +57,17 @@ def check_data(cfg: dict) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg["model"])
     failures = 0
-    for i, line in enumerate(Path(cfg["data"]).open()):
-        if not line.strip():
-            continue
-        row = normalize(json.loads(line))
-        try:
-            tokenizer.apply_chat_template(row["messages"], tokenize=False)
-        except Exception as exc:
-            failures += 1
-            if failures <= 5:
-                print(f"row {i}: {type(exc).__name__}: {str(exc)[:160]}")
+    with Path(cfg["data"]).open() as f:
+        for i, line in enumerate(f):
+            if not line.strip():
+                continue
+            row = normalize(json.loads(line))
+            try:
+                tokenizer.apply_chat_template(row["messages"], tokenize=False)
+            except (ValueError, TypeError, KeyError) as exc:
+                failures += 1
+                if failures <= 5:
+                    print(f"row {i}: {type(exc).__name__}: {str(exc)[:160]}")
     print(f"checked rows; failures: {failures}")
     if failures:
         raise SystemExit(1)
