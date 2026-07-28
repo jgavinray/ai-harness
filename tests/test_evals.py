@@ -164,6 +164,7 @@ def test_code_review_task_plants_uncommitted_defect(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=work, check=True)
     subprocess.run(["git", "add", "-A"], cwd=work, check=True)
     subprocess.run(["git", "-c", "user.email=e@l", "-c", "user.name=e",
+                    "-c", "commit.gpgsign=false",
                     "commit", "-qm", "initial"], cwd=work, check=True)
     subprocess.run(["bash", str((task / "setup.sh").resolve()), str(task.resolve())],
                    cwd=work, check=True)

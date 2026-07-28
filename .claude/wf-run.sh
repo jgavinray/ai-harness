@@ -49,6 +49,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
 GRAPH=".claude/tasks.json"
 STATE=".claude/wf-state.json"
 FEEDBACK=".claude/feedback.jsonl"
@@ -58,6 +59,10 @@ mkdir -p .claude "$TRANSCRIPTS"
 
 IS_GIT=0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 && IS_GIT=1
+# Automated commits must not depend on the user's signing setup (gpgsign=true with
+# no key for the automation identity fails EVERY snapshot -> rollback silently off).
+GITC="git"
+[ "${WF_GIT_SIGN:-0}" = "1" ] || GITC="git -c commit.gpgsign=false -c tag.gpgsign=false"
 
 # ---- graph ops: driver-owned, serialized via flock when available -----------
 graph_write() { # jq-program args...
@@ -96,7 +101,7 @@ snapshot() { # -> echoes ref, empty if not a git repo
   [ "$IS_GIT" -eq 1 ] || return 0
   git add -A >/dev/null 2>&1
   if ! git diff --cached --quiet 2>/dev/null; then
-    git commit -q -m "wf-run: baseline before $1 attempt $2" >/dev/null 2>&1
+    $GITC commit -q -m "wf-run: baseline before $1 attempt $2" >/dev/null 2>&1
   fi
   git rev-parse HEAD
 }
@@ -115,7 +120,7 @@ rollback() { # ref
 commit_pass() { # id
   [ "$IS_GIT" -eq 1 ] || return 0
   git add -A >/dev/null 2>&1
-  git diff --cached --quiet 2>/dev/null || git commit -q -m "wf-run: $1 done — $(node_field "$1" desc)" >/dev/null 2>&1
+  git diff --cached --quiet 2>/dev/null || $GITC commit -q -m "wf-run: $1 done — $(node_field "$1" desc)" >/dev/null 2>&1
 }
 
 # ---- gates -------------------------------------------------------------------
@@ -123,10 +128,10 @@ eval_gates() { # id -> sets GATE_OK, GATE_REPORT
   local id="$1" node_verify node_out="" node_ok=0 proj_out="" proj_ok=0
   node_verify=$(node_field "$id" verify)
   if [ -n "$node_verify" ]; then
-    node_out=$(timeout 600 bash -c "$node_verify" 2>&1) || node_ok=$?
+    node_out=$(${TIMEOUT_CMD:+"$TIMEOUT_CMD" 600} bash -c "$node_verify" 2>&1) || node_ok=$?
   fi
   if [ -x .claude/verify.sh ]; then
-    proj_out=$(timeout 600 .claude/verify.sh 2>&1) || proj_ok=$?
+    proj_out=$(${TIMEOUT_CMD:+"$TIMEOUT_CMD" 600} .claude/verify.sh 2>&1) || proj_ok=$?
   fi
   GATE_OK=$(( node_ok == 0 && proj_ok == 0 ? 0 : 1 ))
   GATE_REPORT=$(printf 'node gate (exit %s):\n%s\nproject gate (exit %s):\n%s' \
@@ -141,13 +146,13 @@ run_agent() { # prompt, transcript_path
   case "$BACKEND" in
     claude)
       # shellcheck disable=SC2086
-      timeout "$SESSION_TIMEOUT" claude -p ${MODEL:+--model "$MODEL"} ${WF_CLAUDE_ARGS:-} "$prompt" >"$tpath" 2>&1 || rc=$? ;;
+      ${TIMEOUT_CMD:+"$TIMEOUT_CMD" "$SESSION_TIMEOUT"} claude -p ${MODEL:+--model "$MODEL"} ${WF_CLAUDE_ARGS:-} "$prompt" >"$tpath" 2>&1 || rc=$? ;;
     opencode)
       # shellcheck disable=SC2086
-      timeout "$SESSION_TIMEOUT" opencode run ${MODEL:+--model "$MODEL"} ${WF_OPENCODE_ARGS:-} "$prompt" >"$tpath" 2>&1 || rc=$? ;;
+      ${TIMEOUT_CMD:+"$TIMEOUT_CMD" "$SESSION_TIMEOUT"} opencode run ${MODEL:+--model "$MODEL"} ${WF_OPENCODE_ARGS:-} "$prompt" >"$tpath" 2>&1 || rc=$? ;;
     cmd)
       [ -n "$AGENT_CMD" ] || { echo "wf-run: --agent-cmd required for backend=cmd" >&2; exit 64; }
-      timeout "$SESSION_TIMEOUT" "$AGENT_CMD" "$prompt" >"$tpath" 2>&1 || rc=$? ;;
+      ${TIMEOUT_CMD:+"$TIMEOUT_CMD" "$SESSION_TIMEOUT"} "$AGENT_CMD" "$prompt" >"$tpath" 2>&1 || rc=$? ;;
     *) echo "wf-run: unknown backend $BACKEND" >&2; exit 64 ;;
   esac
   return $rc

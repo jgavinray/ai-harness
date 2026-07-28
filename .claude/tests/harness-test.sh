@@ -8,6 +8,11 @@ T() { # name, command...
   local name="$1"; shift
   if "$@" >/dev/null 2>&1; then echo "PASS $name"; else echo "FAIL $name"; FAILURES=$((FAILURES+1)); fi
 }
+TY() { # yaml test: SKIP if PyYAML unavailable
+  local name="$1"; shift
+  if ! python3 -c "import yaml" >/dev/null 2>&1; then echo "SKIP $name (PyYAML not installed)"; return; fi
+  T "$name" "$@"
+}
 
 # ---- static checks -----------------------------------------------------------
 for f in "$HERE"/hooks/*.sh "$HERE"/wf-run.sh "$HERE"/project-template/.claude/verify.sh; do
@@ -19,11 +24,20 @@ done
 for j in "$HERE"/project-template/pyrightconfig.json "$HERE"/project-template/.mcp.json; do
   T "json:template:$(basename "$j")" jq empty "$j"
 done
-T "yaml:pre-commit" python3 -c "import yaml,sys; yaml.safe_load(open('$HERE/project-template/.pre-commit-config.yaml'))"
+TY "yaml:pre-commit" python3 -c "import yaml,sys; yaml.safe_load(open('$HERE/project-template/.pre-commit-config.yaml'))"
 T "template:gitignore-env" grep -q '^\.env' "$HERE/project-template/.gitignore"
 T "template:mcp-env-interpolation" bash -c "grep -q '\${EXAMPLE_MCP_TOKEN}' '$HERE/project-template/.mcp.json'"
-T "yaml:ci-workflow" python3 -c "import yaml; yaml.safe_load(open('$HERE/project-template/.github/workflows/ci.yml'))"
+TY "yaml:ci-workflow" python3 -c "import yaml; yaml.safe_load(open('$HERE/project-template/.github/workflows/ci.yml'))"
 T "yaml:harness-ratchet" bash -c "grep -q 'min-level 4' '$HERE/project-template/.github/workflows/harness.yml'"
+T "template:ruff-in-pyproject" bash -c "grep -q '\[tool.ruff.format\]' '$HERE/project-template/pyproject.toml' && ! test -f '$HERE/project-template/ruff.toml'"
+T "template:settings-project-paths" bash -c "grep -q 'CLAUDE_PROJECT_DIR/.claude/hooks' '$HERE/project-template/.claude/settings.json' && ! grep -q 'HOME' '$HERE/project-template/.claude/settings.json'"
+T "template:hooks-committed" bash -c "for h in pretool-guard post-edit-check stop-gate session-context; do test -x '$HERE/project-template/.claude/hooks/'\$h.sh || exit 1; done"
+# The template hooks are copies of the root hooks; a fix applied to one and not the
+# other ships the bug to every repo that installs the template.
+T "template:hooks-parity" bash -c "for h in pretool-guard post-edit-check stop-gate session-context; do cmp -s '$HERE/hooks/'\$h.sh '$HERE/project-template/.claude/hooks/'\$h.sh || exit 1; done"
+# macOS has no GNU timeout; every gated command must resolve timeout/gtimeout first.
+T "portable:no-bare-timeout" bash -c "! grep -REn 'timeout [0-9]' '$HERE/hooks' '$HERE/project-template/.claude/hooks' '$HERE/wf-run.sh'"
+T "session-context:fail-open-detector" bash -c "D=\$(mktemp -d); mkdir -p \$D/.claude; cp '$HERE/hooks/session-context.sh' \$D/; chmod +x \$D/session-context.sh; cd \$D && echo '{\"cwd\":\"'\$D'\"}' | ./session-context.sh | grep -q 'silently ABSENT'"
 T "template:commands-exist" bash -c "ls '$HERE/project-template/.claude/commands/'*.md | grep -q ."
 T "plugin-import" node --input-type=module -e "import('$HERE/opencode/plugin/harness.js').then(m=>{if(typeof m.Harness!=='function')process.exit(1)})"
 
@@ -73,7 +87,7 @@ T "syntax:wf-corpus.sh" bash -n "$HERE/wf-corpus.sh"
 
 # ---- wf-run end-to-end -------------------------------------------------------
 WF=$(mktemp -d); mkdir -p "$WF/.claude"; cd "$WF"
-git init -q .; git config user.email t@t; git config user.name t
+git init -q .; git config user.email t@t; git config user.name t; git config commit.gpgsign false
 cat > .claude/tasks.json <<'EOF'
 {"tasks":[
  {"id":"T1","desc":"create a.txt","verify":"test -f a.txt && ! test -f junk.txt","deps":[],"status":"todo","attempts":0},

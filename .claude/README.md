@@ -45,26 +45,29 @@ Supporting layers:
   Intended cycle per task: planner (once per goal) → implement → qa-tester → verifier → code-reviewer → doc-manager → commit. The Stop gate enforces the verifier's definition of done whether or not the agents are invoked.
 
 ## Sensor pack (harness-score L3+)
-`project-template/` now ships the sensor and hygiene layer that maturity scorers (and more importantly, agents) need: `ruff.toml` (linter + formatter — deterministic per-edit feedback, and `post-edit-check.sh` now runs `ruff check` on every .py write when ruff is installed), `pyrightconfig.json` (standard-mode type checking — the compiler catches agent mistakes for free), `.pre-commit-config.yaml` (ruff/format/json/yaml/private-key checks pre-commit, quick verify pre-push), `.gitignore` (.env patterns plus harness state files that shouldn't be committed), `.mcp.json` (credentials via `${ENV_VAR}` interpolation, never literals), and `.claude/commands/` (task-loop, workflow, retro as explicit slash-command entry points). Drop these into any repo for the sensor items. `.github/workflows/ci.yml` runs all sensors on every push (CI-01/02/03), and `.github/workflows/harness.yml` is the L4 ratchet: `npx harness-score --min-level 4` fails any change that regresses the harness, plus badge generation. L4 requires L3 + hooks >= 70% + total >= 80% — with this pack applied the numbers clear comfortably; the ratchet is what makes the level durable rather than incidental. Note on scorers flagging `SessionStart`: it is a documented Claude Code hook event per the current hooks reference — prefer the working hook over the scorer point if a stale scorer disagrees.
+`project-template/` now ships the sensor and hygiene layer that maturity scorers (and more importantly, agents) need: `pyproject.toml` `[tool.ruff]` sections (linter + formatter — deterministic per-edit feedback, and `post-edit-check.sh` now runs `ruff check` on every .py write when ruff is installed), `pyrightconfig.json` (standard-mode type checking — the compiler catches agent mistakes for free), `.pre-commit-config.yaml` (ruff/format/json/yaml/private-key checks pre-commit, quick verify pre-push), `.gitignore` (.env patterns plus harness state files that shouldn't be committed), `.mcp.json` (credentials via `${ENV_VAR}` interpolation, never literals), and `.claude/commands/` (task-loop, workflow, retro as explicit slash-command entry points). Drop these into any repo for the sensor items. `.github/workflows/ci.yml` runs all sensors on every push (CI-01/02/03), and `.github/workflows/harness.yml` is the L4 ratchet: `npx harness-score --min-level 4` fails any change that regresses the harness, plus badge generation. L4 requires L3 + hooks >= 70% + total >= 80% — with this pack applied the numbers clear comfortably; the ratchet is what makes the level durable rather than incidental. Note on scorers flagging `SessionStart`: it is a documented Claude Code hook event per the current hooks reference — prefer the working hook over the scorer point if a stale scorer disagrees.
 
 ## Install
+**Project-level is the default** — hooks travel with the repo, no per-machine setup, scanners can verify them (HKS-05), and a fresh clone is fully guarded:
+```bash
+cp -r project-template/.claude <project>/        # settings.json + hooks/ + commands/ + verify.sh
+cp project-template/CLAUDE.md <project>/CLAUDE.md
+chmod +x <project>/.claude/hooks/*.sh <project>/.claude/verify.sh
+```
+Paths in the template settings.json use `$CLAUDE_PROJECT_DIR` — nothing references `$HOME`.
+
+**User-level is the optional fallback** for repos that don't carry their own harness. The root `settings.json` here is this repo's *own* project-level config and also uses `$CLAUDE_PROJECT_DIR` — rewrite those paths to `$HOME/.claude/hooks/...` when merging it into `~/.claude/settings.json`, since `$CLAUDE_PROJECT_DIR` resolves to whatever repo is open:
 ```bash
 mkdir -p ~/.claude/{hooks,agents,skills}
 cp CLAUDE.md ~/.claude/CLAUDE.md
 cp hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/hooks/*.sh
 cp agents/*.md ~/.claude/agents/
-cp -r skills/task-loop ~/.claude/skills/
-# Merge settings.json into ~/.claude/settings.json (or copy if none exists)
+cp -r skills/task-loop skills/workflow ~/.claude/skills/
+# Merge settings.json into ~/.claude/settings.json
 ```
-Requires `jq` on PATH. Verify wiring with `/hooks` inside Claude Code.
+Requires `jq` on PATH. Verify wiring with `/hooks` inside Claude Code. `session-context.sh` now warns into context at session start if any sibling hook script is missing or non-executable — a fail-open guard you believe in is worse than none.
 
-Per project:
-```bash
-cp -r project-template/.claude <project>/
-cp project-template/CLAUDE.md <project>/CLAUDE.md   # then fill in
-chmod +x <project>/.claude/verify.sh
-```
-The template `verify.sh` exits 0 until you add checks; the gate only bites once it's real.
+Either way, fill in `<project>/CLAUDE.md` afterwards. The template `verify.sh` exits 0 until you add checks; the gate only bites once it's real.
 
 ## opencode (full port in `opencode/`)
 opencode has no declarative hook config; extension is a JS/TS plugin loaded from `~/.config/opencode/plugin/` (global) or `.opencode/plugin/` (project) that returns event handlers. `opencode/plugin/harness.js` implements the same three enforcement layers:
