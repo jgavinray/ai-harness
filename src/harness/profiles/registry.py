@@ -15,6 +15,16 @@ class DeepseekR1Profile(Profile):
     thinking_request = {"chat_template_kwargs": {"thinking": True}}
 
 
+class DeepseekV4FlashProfile(Profile):
+    # Verified 2026-07-29 against deepseek-v4-flash-dspark on vLLM 0.21.1rc1:
+    # reasoning stays null on both trivial and step-by-step-forcing prompts
+    # (chain-of-thought is written inline in `content`, not a separate
+    # `reasoning`/`reasoning_content` delta field or <think>...</think> span),
+    # and tool_calls follow the standard OpenAI id/type/function.arguments
+    # shape. No overrides needed beyond the base Profile.
+    name = "deepseek_v4_flash"
+
+
 class DevstralProfile(Profile):
     name = "devstral"
 
@@ -25,7 +35,14 @@ class GemmaProfile(Profile):
 
 
 PROFILES: dict[str, Profile] = {
-    p.name: p for p in (QwenProfile(), DeepseekR1Profile(), DevstralProfile(), GemmaProfile())
+    p.name: p
+    for p in (
+        QwenProfile(),
+        DeepseekR1Profile(),
+        DeepseekV4FlashProfile(),
+        DevstralProfile(),
+        GemmaProfile(),
+    )
 }
 
 

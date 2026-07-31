@@ -168,10 +168,21 @@ def test_tag_splitter_flush():
 
 
 def test_registry():
-    for name in ("qwen", "deepseek_r1", "devstral", "gemma"):
+    for name in ("qwen", "deepseek_r1", "deepseek_v4_flash", "devstral", "gemma"):
         assert get_profile(name).name == name
     with pytest.raises(ValueError):
         get_profile("gpt99")
+
+
+def test_deepseek_v4_flash_has_no_thinking_switch_or_reasoning_tags():
+    """This deployment writes chain-of-thought inline in `content` — it emits
+    no <think> span and no separate reasoning field (probed 2026-07-29 on vLLM
+    0.21.1rc1). Splitting on tags that never arrive, or sending a thinking
+    kwarg its chat template does not define, would both be guesses. Kept
+    distinct from deepseek_r1, which does own a probed switch."""
+    p = get_profile("deepseek_v4_flash")
+    assert p.reasoning_tags is None
+    assert p.thinking_request == {}
 
 
 def test_render_streams_from_backend_even_for_nonstream_client():
