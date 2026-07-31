@@ -22,3 +22,17 @@ made with an explicit `--no-gpg-sign`.
 direction — its throwaway `eval <eval@local>` identity inherited global
 signing and had no key, killing every eval trial at repo seeding. Fixed the
 same day with `-c commit.gpgsign=false`.
+
+---
+
+## 2026-07-30 — be more succinct
+
+> I need you to be more succinct
+
+**Context:** reporting eval progress on the `full` vs `full-thinking` run.
+Replies had grown into multi-section writeups with tables, per-trial dumps,
+and caveat paragraphs where two or three lines would do.
+
+**Applied:** lead with the answer. Tables only when comparing more than two
+things. Cut restated context, hedging, and unrequested analysis. Detail on
+request, not by default.
