@@ -41,8 +41,10 @@ max_steps = 8
 max_chars = 4000
 
 [routing]
-reasoning = true            # route explanation/architecture/research turns to a reasoning-role backend
-reasoning_readonly_tools = ["Read", "Grep", "Glob", "LS", "WebFetch"]
+reasoning = true            # route SHORT explanation/architecture questions to a reasoning-role backend
+# Subtractive: names only the tools the route hides, never the ones it permits.
+# Everything unnamed — including every MCP tool — stays visible.
+reasoning_blocked_tools = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
 
 [review]
 enabled = false             # opt in: strong-model critic for risky executor checkpoints
@@ -118,7 +120,10 @@ chunk_chars = 4000
 # context_window = 131072
 # roles = ["main"]           # main | subagent | fast | reasoning | plan | review | critic
 # roles = ["candidate"]      # shadow-eval only; never live-routed
-# capabilities = []          # e.g. ["vision"], ["reasoning_budget"]
+# capabilities = []          # e.g. ["vision"], ["reasoning"], ["reasoning_budget"]
+#                            # "reasoning" = ask this backend to think; the profile
+#                            # holds the field that switches the channel on, so it
+#                            # is inert on a family with no probed switch
 # relaxed = []               # eval-gated scaffolds this backend no longer needs
 #
 # [cache]

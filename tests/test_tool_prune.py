@@ -205,3 +205,20 @@ def test_named_tools_soft_cap_when_history_full():
     assert "mcp__github__list_issues" in names
     assert names[:7] == list(used)  # called prefix order untouched
     assert len(names) == 9          # 7 called + 1 named in cap + 1 soft-capped
+
+
+def test_prune_never_shrinks_an_inventory_recorded_upstream():
+    # A stage upstream of the prune may narrow conv.tools while recording the
+    # client's full surface in all_tools (the readonly reasoning route does).
+    # Overwriting all_tools with the already-narrowed conv.tools strands every
+    # hidden tool: relay._surface_tool has nothing left to recover from, so a
+    # legitimate MCP call dies as "unknown tool" (live 2026-07-29, kaibo).
+    narrowed = tuple(t for t in ALL_TOOLS if t.name in ("Read", "WebFetch"))
+    upstream = Conversation(
+        "s", (), narrowed, GenParams(max_tokens=100), all_tools=ALL_TOOLS + MCP_TOOLS
+    )
+    out = ToolPruneStage().apply(upstream, Settings())
+    assert out.all_tools == ALL_TOOLS + MCP_TOOLS
+    assert "mcp__github__create_pr" in {t.name for t in out.all_tools}
+    # and the catalog advertises the real inventory, not the narrowed view
+    assert "mcp__github__create_pr" in out.system

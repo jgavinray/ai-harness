@@ -20,7 +20,7 @@ module and lists where to start for common change types.
 .venv/bin/pytest tests/test_relay.py -q   # one file
 .venv/bin/pytest tests/test_relay.py::test_happy_path -q   # one test
 docker compose build && docker compose up -d   # the ONLY deployment path (serving + flywheel)
-.venv/bin/python evals/run.py --backend-url http://192.168.0.196:8000/v1 \
+.venv/bin/python evals/run.py --backend-url http://192.168.0.43:8000/v1 \
     --model qwen3.6-27b --profile qwen --kind vllm \
     --configs full --trials 20 --out evals/results/<name>   # envelope eval (add --tasks a,b to filter)
 .venv/bin/python evals/report.py evals/results/<name>/results.jsonl   # per-family verdict table

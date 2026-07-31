@@ -113,7 +113,15 @@ class PlanningCfg(BaseModel):
 
 class RoutingCfg(BaseModel):
     reasoning: bool = True
-    reasoning_readonly_tools: list[str] = ["Read", "Grep", "Glob", "LS", "WebFetch"]
+    # Subtractive by law (2026-07-11-default-open-enforcement): name only the
+    # tools this route exists to prevent, never the ones it permits. The former
+    # allowlist ["Read", "Grep", "Glob", "LS", "WebFetch"] named three tools
+    # that appear in 0 of 371 observed requests — this client ships no Grep,
+    # Glob, or LS — so it collapsed to Read+WebFetch and hid every client-owned
+    # MCP tool, which no allowlist here can enumerate. Bash stays visible: with
+    # no Grep/Glob in the client it is the only way to explore a repo, and its
+    # misuse is already covered by preflight and the edit/verify guards.
+    reasoning_blocked_tools: list[str] = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
 
 
 class ReviewCfg(BaseModel):

@@ -420,6 +420,56 @@ async def test_reasoning_route_uses_readonly_tools_only():
     assert [t["function"]["name"] for t in sent.get("tools", [])] == ["Read"]
 
 
+async def test_reasoning_route_can_still_surface_an_unsurfaced_tool():
+    """The readonly reasoning filter narrows what the model SEES; it must not
+    narrow what the model may CALL. Live 2026-07-29: an MCP-server turn worded
+    "explain ..." routed to reasoning, the filter overwrote all_tools with the
+    5-name readonly allowlist, and _surface_tool could no longer recover the
+    MCP tool — every attempt died as "unknown tool ...; available tools: Read,
+    WebFetch" until the retry budget ran out."""
+    from harness.config import PoolBackendCfg
+
+    mcp_tool = {
+        "name": "mcp__kaibo__consult",
+        "description": "Ask another model about the codebase",
+        "input_schema": {
+            "type": "object",
+            "properties": {"prompt": {"type": "string"}},
+            "required": ["prompt"],
+        },
+    }
+
+    fake = FakeOpenAI()
+    fake.push([
+        tool_chunk("c1", "mcp__kaibo__consult", '{"prompt": "how does relay work"}'),
+        finish_chunk("tool_calls"),
+    ])
+
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="reasoner", base_url="http://fake/v1", model="r", roles=["reasoning"]),
+        PoolBackendCfg(name="executor", base_url="http://fake/v1", model="m", roles=["main"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False, tools=[READ_TOOL, EDIT_TOOL, mcp_tool])
+    body["messages"] = [{"role": "user", "content": "Explain what kaibo says about the relay"}]
+
+    async with client:
+        resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    text = json.dumps(payload)
+    assert "unknown tool" not in text
+    assert "[harness]" not in text
+    calls = [b for b in payload["content"] if b["type"] == "tool_use"]
+    assert [c["name"] for c in calls] == ["mcp__kaibo__consult"]
+
+
 async def test_review_sidecar_adds_feedback_on_done_guard():
     from harness.config import PoolBackendCfg
 
@@ -1021,3 +1071,201 @@ async def test_kv_used_holds_last_reading_between_successful_polls():
         d = (await client.get("/stats")).json()["backends"]["v"]
     assert d["kv_used_pct"] == 42.0  # held, not flickered to null
     assert d["kv_used_est"] is False
+
+
+# --- Claude Code compatibility: server-side tools and structured output ------
+
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 8,
+}
+
+
+async def test_server_side_tool_definition_does_not_fail_the_request():
+    # Claude Code's WebSearch is a separate Messages API call carrying this
+    # definition; it has no input_schema, which used to 400 the whole request.
+    fake = FakeOpenAI()
+    fake.push([text_chunk("I cannot search the web here."), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        resp = await client.post(
+            "/v1/messages",
+            json=request_body(stream=False, tools=[WEB_SEARCH_TOOL, READ_TOOL]),
+        )
+    assert resp.status_code == 200
+    # the backend cannot execute a server-side tool, so it is never offered
+    sent_tools = fake.requests[-1].get("tools") or []
+    assert [t["function"]["name"] for t in sent_tools] == ["Read"]
+
+
+async def test_server_side_tool_only_request_sends_no_tools():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("no web access"), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        resp = await client.post(
+            "/v1/messages", json=request_body(stream=False, tools=[WEB_SEARCH_TOOL])
+        )
+    assert resp.status_code == 200
+    assert "tools" not in fake.requests[-1]
+
+
+async def test_count_tokens_accepts_server_side_tool():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("x"), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        resp = await client.post(
+            "/v1/messages/count_tokens",
+            json=request_body(stream=False, tools=[WEB_SEARCH_TOOL]),
+        )
+    assert resp.status_code == 200
+    assert resp.json()["input_tokens"] > 0
+
+
+TITLE_SCHEMA = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+
+
+async def test_output_config_schema_constrains_the_backend_request():
+    fake = FakeOpenAI()
+    fake.push([text_chunk('{"title": "fix the failing test"}'), finish_chunk("stop")])
+    body = request_body(stream=False, tools=[])
+    body["output_config"] = {
+        "effort": "high",
+        "format": {"type": "json_schema", "schema": TITLE_SCHEMA},
+    }
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json=body)
+    assert resp.status_code == 200
+    assert fake.requests[-1]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "schema": TITLE_SCHEMA, "strict": True},
+    }
+
+
+async def test_request_without_output_config_sets_no_response_format():
+    fake = FakeOpenAI()
+    fake.push([text_chunk("plain"), finish_chunk("stop")])
+    async with make_client(fake) as client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False, tools=[]))
+    assert resp.status_code == 200
+    assert "response_format" not in fake.requests[-1]
+
+
+async def test_reasoning_route_shapes_tools_subtractively():
+    """Blocked-list, never allow-list (2026-07-11 default-open-enforcement).
+    The old allowlist named Grep/Glob/LS — tools that appear in 0 of 371 real
+    requests — so it collapsed to Read+WebFetch and hid every MCP tool, which
+    no allowlist in this codebase can enumerate."""
+    from harness.config import PoolBackendCfg
+
+    mcp_tool = {
+        "name": "mcp__kaibo__consult",
+        "description": "Ask another model about the codebase",
+        "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}}},
+    }
+    fake = FakeOpenAI()
+    fake.push([text_chunk("explanation"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="reasoner", base_url="http://fake/v1", model="r", roles=["reasoning"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    body = request_body(stream=False, tools=[READ_TOOL, EDIT_TOOL, BASH_TOOL, mcp_tool])
+    body["messages"] = [{"role": "user", "content": "Explain the relay"}]
+
+    async with client:
+        resp = await client.post("/v1/messages", json=body)
+
+    assert resp.status_code == 200
+    shown = [t["function"]["name"] for t in fake.requests[0].get("tools", [])]
+    assert "mcp__kaibo__consult" in shown   # client-owned surface always passes
+    assert "Read" in shown
+    assert "Edit" not in shown              # the one thing the route exists to prevent
+
+
+async def _payload_for(backend_cfg):
+    """Route one request to a single-backend fleet and return what it sent."""
+    fake = FakeOpenAI()
+    fake.push([text_chunk("ok"), finish_chunk("stop")])
+
+    settings = Settings()
+    settings.backends = [backend_cfg]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+
+    async with client:
+        resp = await client.post("/v1/messages", json=request_body(stream=False))
+
+    assert resp.status_code == 200
+    return fake.requests[0]
+
+
+async def test_reasoning_capability_asks_a_thinking_backend_to_think():
+    """The `reasoning` capability is the opt-in; the PROFILE owns the wire
+    spelling (Law 4). This deployment's DeepSeek only emits a reasoning channel
+    when sent chat_template_kwargs={"thinking": true} — probed 2026-07-30, it
+    accepts thinking_token_budget and silently ignores it, so reasoning_budget
+    (which owns the *depth* knob) cannot switch the channel on."""
+    from harness.config import PoolBackendCfg
+
+    sent = await _payload_for(
+        PoolBackendCfg(
+            name="thinker",
+            base_url="http://fake/v1",
+            model="r",
+            profile="deepseek_r1",
+            roles=["main", "subagent", "fast"],
+            capabilities=["reasoning"],
+        )
+    )
+    assert sent["chat_template_kwargs"] == {"thinking": True}
+
+
+async def test_a_backend_without_the_reasoning_capability_is_left_alone():
+    """Same thinking-capable profile, no declared capability: an undeclared
+    backend's payload is untouched, so adding the profile never changes what an
+    already-certified backend sends."""
+    from harness.config import PoolBackendCfg
+
+    sent = await _payload_for(
+        PoolBackendCfg(
+            name="quiet",
+            base_url="http://fake/v1",
+            model="r",
+            profile="deepseek_r1",
+            roles=["main", "subagent", "fast"],
+        )
+    )
+    assert "chat_template_kwargs" not in sent
+
+
+async def test_a_profile_with_no_thinking_switch_sends_nothing_extra():
+    """Declaring the capability on a family whose profile has no thinking
+    switch is inert rather than a guess: only a profile knows its own spelling
+    (qwen3 says enable_thinking, this deepseek says thinking), so a family that
+    has never been probed sends no invented field."""
+    from harness.config import PoolBackendCfg
+
+    sent = await _payload_for(
+        PoolBackendCfg(
+            name="qwenish",
+            base_url="http://fake/v1",
+            model="q",
+            profile="qwen",
+            roles=["main", "subagent", "fast"],
+            capabilities=["reasoning"],
+        )
+    )
+    assert "chat_template_kwargs" not in sent

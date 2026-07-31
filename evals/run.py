@@ -2,7 +2,7 @@
 """Eval runner: tasks x configs x trials through the real Claude Code CLI.
 
 Usage:
-  .venv/bin/python evals/run.py --backend-url http://192.168.0.196:8001/v1 \
+  .venv/bin/python evals/run.py --backend-url http://192.168.0.43:8000/v1 \
       --model qwen3.6-27b --profile qwen --kind vllm \
       --configs baseline,full --trials 3 --out evals/results
 
@@ -83,7 +83,11 @@ def run_trial(task_dir: Path, cfg_path: Path, port: int, log_path: Path,
                                    f"eval-{task_dir.name}-{time.time_ns()}"))
     subprocess.run(["git", "init", "-q"], cwd=workdir, check=True)
     subprocess.run(["git", "add", "-A"], cwd=workdir, check=True)
+    # gpgsign=false: the throwaway identity has no key, so a maintainer with
+    # global commit.gpgsign = true otherwise loses every trial to "gpg failed
+    # to sign the data" before the harness is even reached (live 2026-07-30).
     subprocess.run(["git", "-c", "user.email=eval@local", "-c", "user.name=eval",
+                    "-c", "commit.gpgsign=false",
                     "commit", "-qm", "initial"], cwd=workdir, check=True)
     setup = task_dir / "setup.sh"
     if setup.exists():

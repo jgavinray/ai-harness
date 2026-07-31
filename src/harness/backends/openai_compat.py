@@ -37,6 +37,15 @@ def _vllm_grammar_schema(schema: Any) -> Any:
 
 
 class OpenAIBackend(Backend):
+    def apply_response_format(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
+        # OpenAI-compatible structured output; vLLM and llama.cpp both honour
+        # it, and unlike apply_constraint it never forces a tool call.
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema, "strict": True},
+        }
+        return payload
+
     async def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
         url = self.cfg.base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {self.cfg.api_key}"}

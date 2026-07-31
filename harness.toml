@@ -11,8 +11,9 @@ port = 8484
 [[backends]]
 name = "qwen27"
 kind = "vllm"
-base_url = "http://192.168.0.196:8000/v1"
-model = "qwen3.6-27b"
+base_url = "http://192.168.0.43:8000/v1"   # moved off .196 (retired); serves
+model = "qwen3.6-27b"                      # /models/Qwen3.6-27B-int4-AutoRound,
+                                           # the exact build of the 140/140 run
 profile = "qwen"
 context_window = 262144
 # Same role surface the certified eval backend had (single-backend default),
@@ -21,6 +22,33 @@ context_window = 262144
 # unchanged). plan/critic roles stay absent: unmeasured side-channels.
 roles = ["main", "subagent", "fast", "review"]
 max_in_flight = 2
+
+[[backends]]
+name = "deepseek-v4-flash"
+kind = "vllm"
+base_url = "http://192.168.0.33:8888/v1"
+model = "deepseek-v4-flash-dspark"   # root: deepseek-ai/DeepSeek-V4-Flash-DSpark
+profile = "deepseek_r1"              # splits <think>…</think> if the model ever emits it;
+# a no-op otherwise. Probed 2026-07-30: this deployment runs no --reasoning-parser
+# (the `reasoning` field comes back empty), so its thinking arrives inline as
+# content. OpenAI tool-calling verified working against the live endpoint.
+context_window = 262144              # vLLM reports max_model_len = 262144
+# reasoning ONLY. "review" deliberately stays on qwen27 (owner decision,
+# 2026-07-30: no thinking model on the review path). plan/critic remain absent
+# for the same reason they are absent above: unmeasured side-channels.
+roles = ["reasoning"]
+max_in_flight = 1   # same GB10 box as the qwen35 candidate below: sustains one request
+# Switches the thinking channel on; the deepseek_r1 profile owns the field that
+# does it. Without it this model reasons inline in `content` and the `reasoning`
+# field comes back null; with it vLLM populates a real reasoning channel that
+# base.py parses into ThinkingDelta, and tool calling still works (2026-07-30).
+# reasoning_budget is deliberately NOT declared: probed the same day, this
+# endpoint accepts thinking_token_budget and ignores it (budget 256 -> 1254
+# reasoning chars, budget 4096 -> 1433). Declaring it would make the metrics
+# report a budget that never bound. Depth here comes from max_tokens, which
+# clients already send generously on reasoning turns (median 64000, min 8192
+# across observed traffic).
+capabilities = ["reasoning"]
 
 #[[backends]]
 #name = "qwen35"
@@ -31,17 +59,6 @@ max_in_flight = 2
 #context_window = 262144
 #roles = ["candidate"]
 #max_in_flight = 1  # GB10 sustains exactly one request even though vLLM accepts more
-
-#[[backends]]
-#name = "qwen80-thinking"
-#kind = "vllm"
-#base_url = "http://192.168.0.196:8001/v1"
-#model = "qwen3-next-80b-a3b-thinking"  # down as of 2026-07-08; re-enter via eval gate
-#profile = "qwen"
-#context_window = 262144
-#roles = ["reasoning", "plan", "review", "critic"]
-#capabilities = ["reasoning", "reasoning_budget"]
-#max_in_flight = 2
 
 [debug]
 dump_prompts = false

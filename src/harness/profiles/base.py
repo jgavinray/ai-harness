@@ -73,6 +73,14 @@ class Profile:
     name = "base"
     supports_system_role = True
     reasoning_tags: tuple[str, str] | None = None
+    # Extra request fields that switch this family's thinking channel ON, sent
+    # only to backends declaring the "reasoning" capability. A wire format, so
+    # it lives here and not in config (Law 4): every family spells it
+    # differently (this deepseek: thinking, qwen3: enable_thinking), and only a
+    # profile knows which. Empty = this family has no probed switch, so nothing
+    # is sent rather than a guess. Static, so the payload stays byte-stable
+    # across a session's turns (Law 2).
+    thinking_request: dict[str, Any] = {}
 
     # ---------- render ----------
 

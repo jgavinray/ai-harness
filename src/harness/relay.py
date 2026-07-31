@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from copy import deepcopy
 from dataclasses import replace
 
 from harness.action_state import current_action_state, shape_tools_for_state
@@ -248,6 +249,22 @@ def _state_allows_tool(name: str, action_state, settings: Settings) -> bool:
     return name not in action_state.blocked_tools
 
 
+def _apply_thinking_request(payload: dict, profile: Profile, backend, metrics: dict) -> None:
+    """Switch a thinking backend's reasoning channel on.
+
+    Two halves, each owned by the layer that knows it: the backend declares the
+    "reasoning" capability (config says WHETHER, exactly as "reasoning_budget"
+    declares the depth knob), and its profile holds the field that flips it
+    (a wire format, so it belongs to the profile — Law 4). A backend that never
+    declared the capability is untouched.
+    """
+    capabilities = getattr(getattr(backend, "cfg", backend), "capabilities", []) or []
+    if "reasoning" not in capabilities or not profile.thinking_request:
+        return
+    payload.update(deepcopy(profile.thinking_request))
+    metrics["thinking_request"] = sorted(profile.thinking_request)
+
+
 def _record_preflight(metrics: dict, call: ToolCall, decision) -> None:
     metrics["preflight_decision"] = decision.decision
     metrics["preflight_reason"] = decision.reason
@@ -348,6 +365,7 @@ async def run(
         m["backend_tool_count"] = len(payload_conv.tools)
         m["backend_tool_names"] = [tool.name for tool in payload_conv.tools]
         payload = profile.render(payload_conv, model_name)
+        _apply_thinking_request(payload, profile, backend, m)
         apply_reasoning_budget(payload, settings, backend, role, body or {}, payload_conv, m)
         required_tool = action_state.required_tool
         if effective_requires_tool and required_tool is None and len(payload_conv.tools) == 1:
@@ -358,6 +376,7 @@ async def run(
             and len(payload_conv.tools) == 1
         ):
             required_tool = payload_conv.tools[0].name
+        tool_constrained = False
         if (
             not attempts
             and backend.constrained
@@ -371,8 +390,17 @@ async def run(
             if required is not None:
                 payload = backend.apply_constraint(payload, required.input_schema)
                 m["first_attempt_constraints"] += 1
+                tool_constrained = True
         if attempts and backend.constrained and constraint_schema is not None:
             payload = backend.apply_constraint(payload, constraint_schema)
+            tool_constrained = True
+        # Structured output: the client wants JSON matching its schema, not a
+        # tool call. Skipped when a tool constraint already owns the decoder.
+        if payload_conv.params.response_schema is not None and not tool_constrained:
+            payload = backend.apply_response_format(
+                payload, payload_conv.params.response_schema
+            )
+            m["response_format"] = True
 
         detector = DegenerateDetector()
         bad_call: ToolCall | None = None

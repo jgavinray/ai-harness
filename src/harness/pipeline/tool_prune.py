@@ -92,12 +92,18 @@ class ToolPruneStage:
         for name in named[: settings.pipeline.max_tools]:
             if name in by_name and name not in keep:
                 keep.append(name)
+        # The full client surface, which an earlier stage may already have
+        # recorded while narrowing conv.tools (the readonly reasoning route).
+        # Never shrink it: all_tools is what relay._surface_tool recovers a
+        # called-but-unsurfaced tool from, and the catalog promises the model
+        # every name listed there is callable.
+        inventory = conv.all_tools or conv.tools
         system = conv.system
         if settings.pipeline.tool_catalog:
-            system = system + "\n\n" + _catalog(conv.tools)
+            system = system + "\n\n" + _catalog(inventory)
         return replace(
             conv,
             tools=tuple(by_name[n] for n in keep),
-            all_tools=conv.tools,
+            all_tools=inventory,
             system=system,
         )

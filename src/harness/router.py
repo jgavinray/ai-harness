@@ -13,6 +13,7 @@ from typing import Any
 
 from harness.backends.pool import BackendPool, PooledBackend
 from harness.config import Settings
+from harness.guards import SHORT_INSTRUCTION_MAX_CHARS
 
 AFFINITY_TTL_S = 3600.0
 KEY_BASIS_CHARS = 2048
@@ -113,11 +114,20 @@ def _latest_user_text(body: dict) -> str:
 
 
 def _looks_reasoning(text: str) -> bool:
-    if not text:
+    # Law 6: free-text intent may only bind for short imperative instructions.
+    # Scanning a whole turn for substrings routed any long task brief that
+    # merely contained "review"/"explain" to the reasoning role and its
+    # narrowed tool surface — the recurring "long briefs lock the tool
+    # surface" shape (live 2026-07-17: a migration brief ending "...review the
+    # escalation path" was left holding Read+WebFetch, and both Agent and
+    # TaskUpdate were denied). Anything longer falls through to main, the role
+    # the envelope suite actually certifies.
+    stripped = text.strip()
+    if not stripped or len(stripped) > SHORT_INSTRUCTION_MAX_CHARS:
         return False
-    if any(word in text for word in EXECUTION_WORDS):
+    if any(word in stripped for word in EXECUTION_WORDS):
         return False
-    return any(word in text for word in REASONING_WORDS)
+    return any(word in stripped for word in REASONING_WORDS)
 
 
 def request_role(body: dict, settings: Settings | None = None) -> str:

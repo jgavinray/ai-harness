@@ -58,6 +58,19 @@ def _decode_block(block: dict[str, Any]) -> Part:
     return UNSUPPORTED
 
 
+def _response_schema(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The JSON schema from output_config.format, when the client asked for one.
+
+    Anthropic's structured-output field. Any other format type (plain text) or
+    a missing schema means the reply is unconstrained.
+    """
+    fmt = (body.get("output_config") or {}).get("format") or {}
+    if fmt.get("type") != "json_schema":
+        return None
+    schema = fmt.get("schema")
+    return schema if isinstance(schema, dict) else None
+
+
 def decode(body: dict[str, Any]) -> Conversation:
     turns = []
     for msg in body.get("messages", []):
@@ -68,6 +81,11 @@ def decode(body: dict[str, Any]) -> Conversation:
             parts = tuple(_decode_block(b) for b in content)
         turns.append(Turn(msg["role"], parts))
 
+    # A tool definition without "input_schema" is a server-side tool (e.g.
+    # {"type": "web_search_20250305", "name": "web_search"}): Anthropic's API
+    # executes it, so a local backend can neither be given its schema nor run
+    # it. Drop it — offering it would invite calls nothing can answer, and
+    # failing the request takes the whole turn down with it.
     tools = tuple(
         ToolDef(
             t["name"],
@@ -76,6 +94,7 @@ def decode(body: dict[str, Any]) -> Conversation:
             t["input_schema"],
         )
         for t in body.get("tools", [])
+        if isinstance(t.get("input_schema"), dict)
     )
 
     params = GenParams(
@@ -83,5 +102,6 @@ def decode(body: dict[str, Any]) -> Conversation:
         temperature=body.get("temperature"),
         stop_sequences=tuple(body.get("stop_sequences") or ()),
         stream=bool(body.get("stream", False)),
+        response_schema=_response_schema(body),
     )
     return Conversation(_flatten_system(body.get("system")), tuple(turns), tools, params)

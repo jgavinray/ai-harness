@@ -96,7 +96,7 @@ For a quick smoke test use `--trials 1`. For decisions use `--trials 3` or more.
 ```bash
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 .venv/bin/python evals/run.py \
-  --backend-url http://192.168.0.196:8001/v1 \
+  --backend-url http://192.168.0.43:8000/v1 \
   --model qwen3.6-27b \
   --profile qwen \
   --kind vllm \
@@ -214,7 +214,7 @@ Then rerun the failing eval task:
 
 ```bash
 .venv/bin/python evals/run.py \
-  --backend-url http://192.168.0.196:8001/v1 \
+  --backend-url http://192.168.0.43:8000/v1 \
   --model qwen3.6-27b \
   --profile qwen \
   --kind vllm \
@@ -228,7 +228,7 @@ Only after the narrow rerun passes, run the full config:
 
 ```bash
 .venv/bin/python evals/run.py \
-  --backend-url http://192.168.0.196:8001/v1 \
+  --backend-url http://192.168.0.43:8000/v1 \
   --model qwen3.6-27b \
   --profile qwen \
   --kind vllm \
@@ -278,7 +278,7 @@ After promotion, run:
 ```bash
 .venv/bin/python -m pytest tests/ -q
 .venv/bin/python evals/run.py \
-  --backend-url http://192.168.0.196:8001/v1 \
+  --backend-url http://192.168.0.43:8000/v1 \
   --model promoted-model-name \
   --profile qwen \
   --kind vllm \
@@ -320,7 +320,7 @@ Do not relax from one task or one trial. Use an ablation run:
 
 ```bash
 .venv/bin/python evals/run.py \
-  --backend-url http://192.168.0.196:8001/v1 \
+  --backend-url http://192.168.0.43:8000/v1 \
   --model qwen3.6-27b \
   --profile qwen \
   --kind vllm \

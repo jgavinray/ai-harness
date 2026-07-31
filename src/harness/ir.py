@@ -57,6 +57,10 @@ class GenParams:
     temperature: float | None = None
     stop_sequences: tuple[str, ...] = ()
     stream: bool = False
+    # JSON schema the reply must satisfy (Anthropic output_config.format).
+    # Claude Code uses it for session titles and its auto-mode permission
+    # classifier; unconstrained prose is unusable to those callers.
+    response_schema: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

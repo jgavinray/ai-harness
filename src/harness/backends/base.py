@@ -29,3 +29,7 @@ class Backend:
 
     def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
         return payload
+
+    def apply_response_format(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
+        """Constrain the reply text to a JSON schema (not a tool call)."""
+        return payload

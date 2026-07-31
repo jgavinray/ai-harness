@@ -412,9 +412,20 @@ def _percentile(values: list[int], pct: float) -> int:
 
 
 def _readonly_reasoning(conv, settings: Settings):
-    allowed = set(settings.routing.reasoning_readonly_tools)
-    tools = tuple(t for t in conv.tools if t.name in allowed)
-    return replace(conv, tools=tools, all_tools=tools)
+    """Narrow which schemas a reasoning turn is SHOWN — never which tools it
+    may CALL. all_tools keeps the client's whole surface so
+    relay._surface_tool can recover anything the model actually calls
+    (2026-07-11 default-open-enforcement: unknown ⇒ allowed, the client owns
+    its tool surface). Live 2026-07-29: overwriting all_tools here turned the
+    readonly list into a permitted-surface enumeration, and every MCP tool —
+    which no allowlist in this codebase can name — died as "unknown tool ...;
+    available tools: Read, WebFetch" until the retry budget ran out.
+
+    The shaping is subtractive: it hides the named mutating tools and leaves
+    everything else — including every MCP tool — visible."""
+    blocked = set(settings.routing.reasoning_blocked_tools)
+    tools = tuple(t for t in conv.tools if t.name not in blocked)
+    return replace(conv, tools=tools, all_tools=conv.all_tools or conv.tools)
 
 
 async def _replay(events):

@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,47 @@ def test_config_matrix():
     assert m["ablate-skills"]["skills"] is False
     assert m["ablate-research"]["research"] is False
     assert m["ablate-review"]["review"] is False
+
+
+def test_full_thinking_is_full_plus_the_reasoning_capability(tmp_path):
+    """The eval delta for the thinking channel (Law 1).
+
+    `full` must stay byte-identical to the certified config or the 140/140
+    baseline is not a baseline; `full-thinking` is that same config plus a
+    fleet backend declaring capabilities = ["reasoning"], so the ONLY variable
+    between the two runs is whether the model was asked to think.
+
+    Declaring it needs [[backends]] rather than [backend]: the single-backend
+    default synthesizes capabilities=[] (backends/pool.py:_fleet_from) and has
+    no way to express one.
+    """
+    m = eval_configs.config_matrix()
+    assert set(m["full"].values()) == {True}
+    assert m["full-thinking"] == m["full"], "must differ only by the capability"
+
+    paths = eval_configs.write_configs(
+        tmp_path, ["full", "full-thinking"],
+        backend_url="http://b/v1", model="m", profile="deepseek_r1", kind="vllm",
+        port=9999, log_path=str(tmp_path / "l.jsonl"),
+    )
+    from harness.config import load_settings
+
+    plain = load_settings(paths["full"])
+    assert plain.backends == [], "full must stay single-backend, exactly as certified"
+
+    thinking = load_settings(paths["full-thinking"])
+    assert [b.capabilities for b in thinking.backends] == [["reasoning"]]
+    # every role the runner's traffic actually lands on, or routing degrades
+    assert set(thinking.backends[0].roles) >= {"main", "subagent", "fast"}
+    assert thinking.backends[0].profile == "deepseek_r1"
+    assert thinking.backends[0].base_url == "http://b/v1"
+
+    # Strongest form of "one variable": full-thinking is the full config
+    # verbatim, with the backend block appended and nothing else touched.
+    full_text = paths["full"].read_text()
+    thinking_text = paths["full-thinking"].read_text()
+    assert thinking_text.startswith(full_text)
+    assert "[[backends]]" in thinking_text[len(full_text):]
 
 
 def test_render_baseline_passthrough(tmp_path):
@@ -142,6 +185,34 @@ def test_all_tasks_complete_and_checkers_valid():
         assert (task / "check.sh").exists(), task
         assert (task / "repo_template").is_dir(), task
         subprocess.run(["bash", "-n", str(task / "check.sh")], check=True)
+
+
+def test_runner_seeds_a_repo_under_global_commit_signing(tmp_path):
+    """The runner's throwaway repos commit as eval <eval@local>, an identity
+    with no GPG key. Live 2026-07-30: with the maintainer's global
+    commit.gpgsign = true, run_trial died on its FIRST trial ("gpg failed to
+    sign the data ... No secret key") before any eval could start. Reproduce
+    the seeding sequence with signing forced on globally.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[commit]\n\tgpgsign = true\n[user]\n\tsigningkey = DEADBEEF\n"
+    )
+    work = tmp_path / "repo"
+    work.mkdir()
+    (work / "a.py").write_text("x = 1\n")
+    env = {**os.environ, "HOME": str(home), "GIT_CONFIG_GLOBAL": str(home / ".gitconfig")}
+
+    runner = Path("evals/run.py").read_text()
+    start = runner.index('subprocess.run(["git", "-c", "user.email=eval@local"')
+    commit_args = runner[start:runner.index("]", start) + 1]
+    args = re.findall(r'"([^"]+)"', commit_args)
+
+    subprocess.run(["git", "init", "-q"], cwd=work, env=env, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=work, env=env, check=True)
+    done = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, f"runner cannot seed a repo when signing is on:\n{done.stderr}"
 
 
 def test_runner_applies_task_setup_script():

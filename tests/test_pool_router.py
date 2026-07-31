@@ -459,3 +459,35 @@ def test_candidate_not_used_as_capability_backend():
                 {"type": "image", "source": {"data": "abc"}},
             ]}]}
     assert router.pick(body).name == "live"
+
+
+def test_long_brief_mentioning_a_reasoning_word_stays_main():
+    # Law 6: free-text intent may only bind for short imperative instructions.
+    # An unbounded substring scan routes any long task brief that happens to
+    # contain "review"/"explain" to the reasoning role, which then narrows the
+    # tool surface — the "long task briefs locking the tool surface" shape.
+    # Live 2026-07-17: such a turn was left with Read+WebFetch and denied both
+    # Agent and TaskUpdate.
+    s = Settings()
+    brief = (
+        "Port the deployment orchestrator off the legacy queue. Keep the "
+        "existing ticket schema, wire the notifier to the new transport, and "
+        "review the escalation path once the migration lands."
+    )
+    assert len(brief) > 64
+    body = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": brief}],
+    }
+    assert request_role(body, s) == "main"
+
+
+def test_short_reasoning_instruction_still_routes_to_reasoning():
+    s = Settings()
+    body = {
+        "model": "claude-opus-4-8",
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "Explain how the router works"}],
+    }
+    assert request_role(body, s) == "reasoning"

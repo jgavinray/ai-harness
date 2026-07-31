@@ -16,6 +16,13 @@ PIPELINE_STAGES = {
 SECTION_STAGES = ("planning", "memory", "skills", "research", "review")
 STAGES = tuple(PIPELINE_STAGES) + SECTION_STAGES
 
+# Configs that add a backend CAPABILITY rather than toggling a pipeline stage.
+# Their stage overrides are identical to the base config named before the dash,
+# so the capability is the only variable between the two runs (Law 1: measure
+# one thing). A capability needs [[backends]] to express — the single-backend
+# default synthesizes capabilities=[] (backends/pool.py:_fleet_from).
+CAPABILITY_CONFIGS = {"full-thinking": ["reasoning"]}
+
 
 def render(
     backend_url: str,
@@ -27,6 +34,7 @@ def render(
     overrides: dict[str, bool],
     traces_dir: str | None = None,
     state_dir: str | None = None,
+    capabilities: list[str] | None = None,
 ) -> str:
     state = Path(state_dir or Path(log_path).parent)
     lines = [
@@ -72,7 +80,25 @@ def render(
     ]
     if traces_dir:
         lines += ["", "[traces]", "enabled = true", f'dir = "{traces_dir}"']
-    return "\n".join(lines) + "\n"
+    text = "\n".join(lines) + "\n"
+    if capabilities:
+        # Appended verbatim after the base config so the generated file is the
+        # base config plus this block and nothing else. Roles cover everything
+        # the runner's traffic lands on: a role with no backend degrades to
+        # "any live backend", which would still serve but would log the wrong
+        # role and muddy the delta.
+        text += "\n".join([
+            "",
+            "[[backends]]",
+            'name = "eval"',
+            f'kind = "{kind}"',
+            f'base_url = "{backend_url}"',
+            f'model = "{model}"',
+            f'profile = "{profile}"',
+            'roles = ["main", "subagent", "fast"]',
+            f"capabilities = {sorted(capabilities)!r}".replace("'", '"'),
+        ]) + "\n"
+    return text
 
 
 def config_matrix() -> dict[str, dict[str, bool]]:
@@ -83,6 +109,8 @@ def config_matrix() -> dict[str, dict[str, bool]]:
     }
     for stage in STAGES:
         matrix[f"ablate-{stage}"] = {s: (s != stage) for s in STAGES}
+    for name in CAPABILITY_CONFIGS:
+        matrix[name] = dict(matrix[name.split("-", 1)[0]])
     return matrix
 
 
@@ -92,6 +120,8 @@ def write_configs(out_dir: Path, names: list[str], **kw) -> dict[str, Path]:
     paths = {}
     for name in names:
         path = out_dir / f"{name}.toml"
-        path.write_text(render(overrides=matrix[name], **kw))
+        path.write_text(render(
+            overrides=matrix[name], capabilities=CAPABILITY_CONFIGS.get(name), **kw
+        ))
         paths[name] = path
     return paths

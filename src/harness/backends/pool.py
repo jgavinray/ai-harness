@@ -66,6 +66,9 @@ class PooledBackend:
     def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
         return self.backend.apply_constraint(payload, schema)
 
+    def apply_response_format(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
+        return self.backend.apply_response_format(payload, schema)
+
     async def stream(self, payload: dict[str, Any]) -> AsyncIterator[dict]:
         self.in_flight += 1
         self.requests += 1
