@@ -31,7 +31,7 @@ docker compose exec flywheel python -m harness.flywheel --config /config/harness
 ## Non-negotiable laws (from docs/superpowers/specs/2026-06-12-small-llm-platform-design.md)
 
 1. **No capability ships without an eval delta.** The envelope suite
-   (`evals/`, 7 task families, n=20, verdicts supported/degraded/unsupported
+   (`evals/`, 9 task families, n=20, verdicts supported/degraded/unsupported
    at 0.95/0.80) gates every feature, model, and config change. History:
    every eval failure so far was a harness gate fighting legitimate model
    behavior, not model weakness — measure before assuming either.
