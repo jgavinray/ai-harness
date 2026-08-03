@@ -32,12 +32,15 @@
 <div class="cards" id="cards"></div>
 <table>
   <thead><tr>
-    <th>backend</th><th>model</th><th>roles</th><th>state</th><th>req</th>
-    <th>err</th><th>in-flight</th><th>decode tok/s</th><th>vLLM decoded</th><th>ttft p50</th><th>ttft p95</th>
+    <th>backend</th><th>model</th><th>roles</th><th>state</th><th>input</th>
+    <th>decode</th><th>in-flight</th><th>decode tok/s</th><th>vLLM decoded</th><th>ttft p50</th><th>ttft p95</th>
     <th>kv hit life</th><th>kv hit recent</th><th>kv writes</th><th>kv used</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
+<div id="totalcost" style="margin-top:1rem; font-size:1.05rem; color:#f0f6fc;">Total Cost: $–</div>
+<div id="opusnote" style="margin-top:0.25rem; font-size:0.8rem; color:#8b949e;">Opus 4.x equivalent prices the same token volume at Claude Opus 4.x series rates ($5 in / $25 out / $0.50 cache-read) — covers Opus 4.5, 4.6, 4.7, 4.8. The older Opus 4 / 4.1 generation was $15/$75.</div>
+<div id="roiline" style="margin-top:0.5rem; font-size:1.1rem; color:#58a6ff; font-weight:600;">ROI: –</div>
 <section class="legend">
   <h2>Legend</h2>
   <dl>
@@ -65,6 +68,33 @@
 const fmt = n => (n ?? 0).toLocaleString();
 const fmtMaybe = n => n == null ? "–" : fmt(n);
 const fmtRate = n => n == null ? "–" : Number(n).toLocaleString(undefined, {maximumFractionDigits: 1});
+const usd = n => n == null ? "–" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+// cost per 1M tokens, keyed by model id (from user's rates)
+const COST = {
+  "qwen3.6-27b":            { in: 0.60, out: 3.60, in_cached: 0.075, out_cached: 0.0 },
+  "deepseek-v4-flash-dspark": { in: 0.14, out: 0.28, in_cached: 0.035, out_cached: 0.0 }
+};
+// Opus 4.x series rates (4.5 / 4.6 / 4.7 / 4.8 are all $5/$25 with $0.50 cache read).
+// Note: the older Opus 4 / 4.1 were $15/$75 — these figures are the 4.x generation.
+const OPUS_RATES = { in: 5, out: 25, in_cached: 0.50, out_cached: 0.0 };
+function computeCost(b, r) {
+  const inp  = (b.vllm_prompt_tokens ?? 0);
+  const cac  = (b.vllm_cached_prompt_tokens ?? 0);
+  const out  = (b.vllm_decoded_tokens ?? 0);
+  const fresh = Math.max(inp - cac, 0);
+  const inCost  = fresh/1e6*r.in + cac/1e6*r.in_cached;
+  const outCost = out/1e6*r.out;
+  return { in: inCost, out: outCost, total: inCost + outCost };
+}
+function costOf(b) {
+  const r = COST[b.model];
+  if (!r) return null;
+  return computeCost(b, r);
+}
+function opusCostOf(b) {
+  if (!COST[b.model]) return null;
+  return computeCost(b, OPUS_RATES);
+}
 let last = "";
 async function tick() {
   try {
@@ -105,17 +135,47 @@ async function tick() {
       .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)
       .join("");
     document.getElementById("rows").innerHTML = Object.entries(s.backends)
-      .map(([name, b]) => `<tr>
+      .map(([name, b]) => {
+        const c = costOf(b);
+        return `<tr>
         <td>${name}</td><td>${b.model}</td><td>${b.roles.join(", ")}</td>
         <td class="${b.down ? "down" : "up"}">${b.down ? "DOWN" : "up"}</td>
-        <td>${fmt(b.requests)}</td><td>${fmt(b.errors)}</td><td>${b.in_flight}</td>
+        <td>${usd(c !== null ? c.in : null)}</td><td>${usd(c !== null ? c.out : null)}</td><td>${b.in_flight}</td>
         <td>${fmtRate(b.live_output_tps)}</td><td>${fmtMaybe(b.vllm_decoded_tokens)}</td>
         <td>${fmt(b.ttft_p50_ms)} ms</td><td>${fmt(b.ttft_p95_ms)} ms</td>
         <td>${b.kv_cache_hit_pct}%</td>
         <td>${b.kv_cache_hit_pct_recent}%</td>
         <td>${fmt(b.kv_written_tokens)}</td>
         <td>${b.kv_used_pct == null ? "–" : (b.kv_used_est ? "~" : "") + b.kv_used_pct + "%"}</td>
-      </tr>`).join("");
+      </tr>`;
+      }).join("");
+    // aggregate cost across all backends -> "Total Cost" above legend
+    let total = 0, opus = 0, any = false, anyOpus = false;
+    for (const b of Object.values(s.backends)) {
+      const c = costOf(b); if (c) { any = true; total += c.total; }
+      const o = opusCostOf(b); if (o) { anyOpus = true; opus += o.total; }
+    }
+    const tc = document.getElementById("totalcost");
+    if (tc) {
+      const self = any ? usd(total) : "–";
+      const op  = anyOpus ? usd(opus) : "–";
+      const mult = (any && anyOpus && opus > 0) ? (opus/total).toFixed(1) + "×" : "–";
+      tc.innerHTML = `Total Cost: ${self}` +
+        `<span style="color:#8b949e; font-size:0.85rem;"> &nbsp;·&nbsp; ` +
+        `Opus 4.x equivalent: ${op} (${mult} self-host)</span>`;
+    }
+    // ROI line: % of the Opus 4.x spend that self-hosting avoids. Based on the
+    // Opus 4.x cost itself (not hardware). No hardware dollar figure shown.
+    const roi = document.getElementById("roiline");
+    if (roi) {
+      const saved = opus - total;
+      const roiPct = (any && anyOpus && opus > 0) ? (saved / opus * 100) : null;
+      const savedTxt = (any && anyOpus) ? usd(saved) : "–";
+      const pctTxt = roiPct == null ? "–" : roiPct.toFixed(1) + "%";
+      roi.innerHTML = `ROI: <span style="color:#3fb950; font-size:1.6rem;">${pctTxt}</span>` +
+        `<span style="color:#8b949e; font-size:0.85rem;"> of Opus 4.x spend · ` +
+        `≈ ${savedTxt} saved</span>`;
+    }
   } catch (e) {
     document.getElementById("err").textContent = "— stats unreachable";
   }
