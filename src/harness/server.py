@@ -274,6 +274,32 @@ def _freeze_retired_model(state: dict, backend: str, current_model: str) -> bool
     return changed
 
 
+def _freeze_removed_backends(state: dict, active_names: set[str]) -> bool:
+    """A backend's [[backends]] block can be removed from harness.toml
+    entirely (retired, not swapped in place) while its accumulated counters
+    remain on disk under its old name. `_freeze_retired_model` only fires for
+    a backend still present in the live pool, so a wholesale removal
+    orphaned those totals forever otherwise (found for heretic and
+    qwen80-thinking after their 2026-07 retirements).
+    """
+    seen = state.setdefault("vllm_model", {})
+    totals_by_backend = state.setdefault("vllm_totals", {})
+    last_by_backend = state.setdefault("vllm_last_counters", {})
+    retired = state.setdefault("retired_totals", {})
+    changed = False
+    for backend in [name for name in seen if name not in active_names]:
+        model = seen.pop(backend)
+        totals = totals_by_backend.pop(backend, {})
+        last_by_backend.pop(backend, None)
+        if model and totals:
+            retired[f"{backend}::{model}"] = {
+                "model": model,
+                **{k: _int_or_none(v) or 0 for k, v in totals.items()},
+            }
+        changed = True
+    return changed
+
+
 def _update_vllm_totals(state: dict, backend: str, counters: dict[str, float]) -> dict[str, int]:
     totals_by_backend = state.setdefault("vllm_totals", {})
     last_by_backend = state.setdefault("vllm_last_counters", {})
@@ -1205,6 +1231,8 @@ def create_app(
                     "live_prompt_tps": backend_prompt_tps,
                     "live_cached_prompt_tps": backend_cached_prompt_tps,
                 }
+            if _freeze_removed_backends(stats_state, {b.name for b in pool.backends}):
+                state_dirty = True
             retired_backends = {
                 key: {
                     "model": v.get("model"),

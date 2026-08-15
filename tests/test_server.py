@@ -923,6 +923,69 @@ async def test_vllm_decoded_tokens_persist_across_harness_and_vllm_restarts(tmp_
     assert persisted["vllm_last_counters"]["v"]["output"] == 80
 
 
+async def test_vllm_totals_freeze_on_backend_removal(tmp_path):
+    # A backend's [[backends]] block can be removed from harness.toml
+    # entirely (retired, not swapped in place) while its accumulated
+    # counters remain on disk under its old name. _freeze_retired_model only
+    # fires for a backend still present in the live pool, so a wholesale
+    # removal must not orphan those totals forever — they need to land in
+    # retired_totals too, same as an in-place model swap does.
+    from harness.config import PoolBackendCfg
+
+    def metrics(output: int, prompt: int = 5000, cached: int = 3000) -> str:
+        return "\n".join([
+            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
+            f'vllm:generation_tokens_total{{engine="0",model_name="m"}} {output}',
+            f'vllm:prompt_tokens_total{{engine="0",model_name="m"}} {prompt}',
+            f'vllm:prompt_tokens_cached_total{{engine="0",model_name="m"}} {cached}',
+        ])
+
+    settings = Settings()
+    settings.log.requests_path = str(tmp_path / "requests.jsonl")
+    settings.backends = [
+        PoolBackendCfg(name="heretic", kind="vllm", base_url="http://fake/v1",
+                       model="qwen36-35b-heretic", roles=["fast"]),
+    ]
+    fake = FakeOpenAI()
+    fake.metrics_text = metrics(1250)
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        before_removal = (await client.get("/stats")).json()
+
+    assert before_removal["backends"]["heretic"]["vllm_decoded_tokens"] == 1250
+
+    # Backend block fully removed from config: gone from the pool, not
+    # swapped to a new model.
+    settings.backends = []
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        after_removal = (await client.get("/stats")).json()
+
+    assert "heretic" not in after_removal["backends"]
+    retired = after_removal["retired_backends"]
+    assert len(retired) == 1
+    frozen = next(iter(retired.values()))
+    assert frozen["model"] == "qwen36-35b-heretic"
+    assert frozen["vllm_decoded_tokens"] == 1250
+    assert frozen["vllm_prompt_tokens"] == 5000
+    assert frozen["vllm_cached_prompt_tokens"] == 3000
+
+    persisted = json.loads((tmp_path / "stats_state.json").read_text())
+    assert "heretic" not in persisted.get("vllm_totals", {})
+    assert "heretic" not in persisted.get("vllm_model", {})
+    retired_key = next(iter(persisted["retired_totals"]))
+    assert persisted["retired_totals"][retired_key]["output"] == 1250
+    assert persisted["retired_totals"][retired_key]["model"] == "qwen36-35b-heretic"
+
+
 async def test_vllm_totals_freeze_under_retired_model_on_swap(tmp_path):
     # A backend's `model` in config can change (new weights swapped onto the
     # same base_url) while its counters keep accumulating under the same

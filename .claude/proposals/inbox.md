@@ -106,3 +106,25 @@ instruction to change anything.
    the answer is genuinely unknown; when config and source already settle it,
    further probing is cost, not rigor. Check what is already known before
    writing a probe.
+
+---
+
+## 2026-08-15 — no eval-gate needed for the qwen3.8-27b/deepseek-v4-flash swaps
+
+> I don't need evaluation for 1
+
+**Context:** flagged that `qwen3.8-27b` (main role, commit `259f11a`) and
+`deepseek-v4-flash-0731` (reasoning role, commit `ee737ec`) went live via
+plain config edits with no `docs/reports/` entry — in apparent tension with
+CLAUDE.md law 1 ("No capability ships without an eval delta... gates every
+feature, model, and config change"). Asked whether to backfill envelope-suite
+evidence for these two before continuing other work.
+
+**Applied:** user waives the eval-gate requirement for these two specific
+already-live swaps; no eval backfill needed, thread closed with no action
+beyond this record. Scope note for future sessions: this waiver was given for
+these two swaps specifically, not stated as a change to law 1 itself — the
+nemotron30 `fast`-role grant (a *new* live role for a `candidate`-only
+backend) is a different case and remains fully gated per the user's own
+earlier instruction, so don't generalize this into "eval gate is optional
+now" without asking again.

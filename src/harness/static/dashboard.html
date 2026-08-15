@@ -76,7 +76,15 @@ const COST = {
   "qwen3.6-27b":            { in: 0.60, out: 3.60, in_cached: 0.075, out_cached: 0.0 },
   "qwen3.8-27b":            { in: 0.45, out: 3.20, in_cached: 0.045, out_cached: 0.0 },
   "deepseek-v4-flash-dspark": { in: 0.14, out: 0.28, in_cached: 0.035, out_cached: 0.0 },
-  "nemotron-3.5-lightning-30b": { in: 0.10, out: 0.25, in_cached: 0.05, out_cached: 0.0 }
+  "nemotron-3.5-lightning-30b": { in: 0.10, out: 0.25, in_cached: 0.05, out_cached: 0.0 },
+  // qwen3-next-80b-a3b-thinking backend is commented out in harness.toml (down
+  // since 2026-07-08, pending re-entry via eval gate) but keeping its rate here
+  // means the dashboard prices it correctly the moment it's live again.
+  "qwen3-next-80b-a3b-thinking": { in: 0.09, out: 1.10, in_cached: 0.07, out_cached: 0.0 },
+  // qwen35 backend (heretic, lost the 2026-07 bake-off) is retired: its
+  // block is fully commented out of harness.toml, not a same-name model
+  // swap, so it needs its own entry for the retired row to price at all.
+  "qwen36-35b-heretic": { in: 0.08, out: 0.75, in_cached: 0.05, out_cached: 0.0 }
 };
 // Opus 4.x series rates (4.5 / 4.6 / 4.7 / 4.8 are all $5/$25 with $0.50 cache read).
 // Note: the older Opus 4 / 4.1 were $15/$75 — these figures are the 4.x generation.
