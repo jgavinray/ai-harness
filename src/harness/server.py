@@ -220,7 +220,9 @@ def _stats_state_path(requests_path: str | Path | None) -> Path | None:
 
 
 def _load_stats_state(path: Path | None) -> dict:
-    default = {"vllm_totals": {}, "vllm_last_counters": {}}
+    default = {
+        "vllm_totals": {}, "vllm_last_counters": {}, "vllm_model": {}, "retired_totals": {},
+    }
     if path is None or not path.exists():
         return default
     try:
@@ -230,12 +232,8 @@ def _load_stats_state(path: Path | None) -> dict:
     if not isinstance(loaded, dict):
         return default
     return {
-        "vllm_totals": loaded.get("vllm_totals") if isinstance(loaded.get("vllm_totals"), dict) else {},
-        "vllm_last_counters": (
-            loaded.get("vllm_last_counters")
-            if isinstance(loaded.get("vllm_last_counters"), dict)
-            else {}
-        ),
+        key: loaded.get(key) if isinstance(loaded.get(key), dict) else {}
+        for key in default
     }
 
 
@@ -249,6 +247,31 @@ def _write_stats_state(path: Path | None, state: dict) -> None:
         tmp.replace(path)
     except OSError:
         pass
+
+
+def _freeze_retired_model(state: dict, backend: str, current_model: str) -> bool:
+    """A backend's configured model can change (new weights on the same
+    base_url) while its counters keep accumulating under the same backend
+    name. When that happens, freeze whatever was accrued so far under the
+    OLD model id into `retired_totals` and reset so new totals accrue
+    cleanly under the new model — otherwise tokens generated under the old
+    model get silently re-priced at the new model's rate.
+    """
+    seen = state.setdefault("vllm_model", {})
+    previous_model = seen.get(backend)
+    changed = previous_model is not None and previous_model != current_model
+    if changed:
+        totals = state.get("vllm_totals", {}).get(backend, {})
+        if totals:
+            retired = state.setdefault("retired_totals", {})
+            retired[f"{backend}::{previous_model}"] = {
+                "model": previous_model,
+                **{k: _int_or_none(v) or 0 for k, v in totals.items()},
+            }
+        state.setdefault("vllm_totals", {})[backend] = {}
+        state.setdefault("vllm_last_counters", {})[backend] = {}
+    seen[backend] = current_model
+    return changed
 
 
 def _update_vllm_totals(state: dict, backend: str, counters: dict[str, float]) -> dict[str, int]:
@@ -1080,7 +1103,15 @@ def create_app(
 
     @app.get("/dashboard")
     async def dashboard():
-        return HTMLResponse(DASHBOARD.read_text())
+        # no-store, not just no-cache: the page ships inside the image, so a
+        # browser that heuristically cached it (this response carries no ETag or
+        # Last-Modified to revalidate against) keeps rendering the previous
+        # build's cost table after a rebuild — a new fleet member silently shows
+        # "$–" instead of its rate. The body is ~11 KB off local disk; there is
+        # nothing to gain by caching it.
+        return HTMLResponse(
+            DASHBOARD.read_text(), headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/admin/reload")
     async def admin_reload():
@@ -1114,6 +1145,8 @@ def create_app(
                     b.kv_used, b.kv_used_ts = kv_used, time.monotonic()
                 elif time.monotonic() - b.kv_used_ts < KV_USED_TTL_S:
                     kv_used = b.kv_used  # hold last good reading across a missed poll
+                if _freeze_retired_model(stats_state, b.name, b.model_name):
+                    state_dirty = True
                 if token_counters:
                     persisted = _update_vllm_totals(stats_state, b.name, token_counters)
                     state_dirty = True
@@ -1172,6 +1205,16 @@ def create_app(
                     "live_prompt_tps": backend_prompt_tps,
                     "live_cached_prompt_tps": backend_cached_prompt_tps,
                 }
+            retired_backends = {
+                key: {
+                    "model": v.get("model"),
+                    "vllm_prompt_tokens": _counter_int(v.get("prompt")),
+                    "vllm_cached_prompt_tokens": _counter_int(v.get("cached_prompt")),
+                    "vllm_decoded_tokens": _counter_int(v.get("output")),
+                }
+                for key, v in stats_state.get("retired_totals", {}).items()
+                if isinstance(v, dict)
+            }
             if state_dirty:
                 _write_stats_state(stats_state_path, stats_state)
         return JSONResponse({
@@ -1183,6 +1226,7 @@ def create_app(
             "vllm_prompt_tokens": _sum_int_present(*vllm_prompt_tokens),
             "vllm_cached_prompt_tokens": _sum_int_present(*vllm_cached_prompt_tokens),
             "backends": backends,
+            "retired_backends": retired_backends,
             "critic": _critic_summary(stats["critic"]),
             "runtime": _runtime_summary(stats["runtime"]),
             "response_cache": {"hits": rcache.hits, "misses": rcache.misses},

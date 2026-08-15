@@ -85,3 +85,13 @@ async def test_dashboard_served():
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "Gavin's Token consumption" in resp.text
+
+
+async def test_dashboard_is_never_cached_by_the_browser():
+    """The page is redeployed by rebuilding the image, so a browser holding a
+    heuristically-cached copy shows the OLD cost table (new fleet members render
+    "$–" with no error). The response must forbid caching outright."""
+    fake = FakeOpenAI()
+    async with make_client(fake) as client:
+        resp = await client.get("/dashboard")
+    assert "no-store" in resp.headers.get("cache-control", "")

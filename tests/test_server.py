@@ -923,6 +923,76 @@ async def test_vllm_decoded_tokens_persist_across_harness_and_vllm_restarts(tmp_
     assert persisted["vllm_last_counters"]["v"]["output"] == 80
 
 
+async def test_vllm_totals_freeze_under_retired_model_on_swap(tmp_path):
+    # A backend's `model` in config can change (new weights swapped onto the
+    # same base_url) while its counters keep accumulating under the same
+    # backend name. Cost is priced by model id, so tokens generated under the
+    # old model must stay attributed to the old model id forever, not get
+    # silently re-rated at whatever price the new model carries.
+    from harness.config import PoolBackendCfg
+
+    def metrics(output: int, prompt: int = 5000, cached: int = 3000) -> str:
+        return "\n".join([
+            'vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.42',
+            f'vllm:generation_tokens_total{{engine="0",model_name="m"}} {output}',
+            f'vllm:prompt_tokens_total{{engine="0",model_name="m"}} {prompt}',
+            f'vllm:prompt_tokens_cached_total{{engine="0",model_name="m"}} {cached}',
+        ])
+
+    settings = Settings()
+    settings.log.requests_path = str(tmp_path / "requests.jsonl")
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="old-model", roles=["main", "subagent", "fast"]),
+    ]
+    fake = FakeOpenAI()
+    fake.metrics_text = metrics(1000)
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        await client.get("/stats")
+        fake.metrics_text = metrics(1250)
+        before_swap = (await client.get("/stats")).json()
+
+    assert before_swap["backends"]["v"]["vllm_decoded_tokens"] == 1250
+
+    # Model swapped: same backend name "v", new model, new vLLM process (its
+    # own fresh Prometheus counter, unrelated to the old process's 1250).
+    settings.backends = [
+        PoolBackendCfg(name="v", kind="vllm", base_url="http://fake/v1",
+                       model="new-model", roles=["main", "subagent", "fast"]),
+    ]
+    fake.metrics_text = metrics(80)
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        after_swap = (await client.get("/stats")).json()
+
+    assert after_swap["backends"]["v"]["model"] == "new-model"
+    # Fresh accumulation under the new model, NOT 1250 + 80.
+    assert after_swap["backends"]["v"]["vllm_decoded_tokens"] == 80
+
+    retired = after_swap["retired_backends"]
+    assert len(retired) == 1
+    frozen = next(iter(retired.values()))
+    assert frozen["model"] == "old-model"
+    assert frozen["vllm_decoded_tokens"] == 1250
+    assert frozen["vllm_prompt_tokens"] == 5000
+    assert frozen["vllm_cached_prompt_tokens"] == 3000
+
+    persisted = json.loads((tmp_path / "stats_state.json").read_text())
+    assert persisted["vllm_totals"]["v"]["output"] == 80
+    retired_key = next(iter(persisted["retired_totals"]))
+    assert persisted["retired_totals"][retired_key]["output"] == 1250
+    assert persisted["retired_totals"][retired_key]["model"] == "old-model"
+
+
 async def test_llamacpp_kv_used_estimated_from_slots_and_sessions(tmp_path):
     # llama.cpp dropped its KV gauges; estimate residency from slot capacity
     # and the last request size of the sessions most recently on this backend.

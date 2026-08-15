@@ -71,8 +71,12 @@ const fmtRate = n => n == null ? "–" : Number(n).toLocaleString(undefined, {ma
 const usd = n => n == null ? "–" : "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 // cost per 1M tokens, keyed by model id (from user's rates)
 const COST = {
+  // qwen27 backend swapped models 2026-08-14 (qwen3.6-27b -> qwen3.8-27b). The
+  // old entry stays so cost already accrued under that model id still prices.
   "qwen3.6-27b":            { in: 0.60, out: 3.60, in_cached: 0.075, out_cached: 0.0 },
-  "deepseek-v4-flash-dspark": { in: 0.14, out: 0.28, in_cached: 0.035, out_cached: 0.0 }
+  "qwen3.8-27b":            { in: 0.45, out: 3.20, in_cached: 0.045, out_cached: 0.0 },
+  "deepseek-v4-flash-dspark": { in: 0.14, out: 0.28, in_cached: 0.035, out_cached: 0.0 },
+  "nemotron-3.5-lightning-30b": { in: 0.10, out: 0.25, in_cached: 0.05, out_cached: 0.0 }
 };
 // Opus 4.x series rates (4.5 / 4.6 / 4.7 / 4.8 are all $5/$25 with $0.50 cache read).
 // Note: the older Opus 4 / 4.1 were $15/$75 — these figures are the 4.x generation.
@@ -134,7 +138,7 @@ async function tick() {
     document.getElementById("cards").innerHTML = cards
       .map(([k, v, s]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`)
       .join("");
-    document.getElementById("rows").innerHTML = Object.entries(s.backends)
+    const liveRows = Object.entries(s.backends)
       .map(([name, b]) => {
         const c = costOf(b);
         return `<tr>
@@ -149,9 +153,28 @@ async function tick() {
         <td>${b.kv_used_pct == null ? "–" : (b.kv_used_est ? "~" : "") + b.kv_used_pct + "%"}</td>
       </tr>`;
       }).join("");
-    // aggregate cost across all backends -> "Total Cost" above legend
+    // Retired: a backend's model swapped onto the same base_url. Tokens
+    // generated under the old model froze here at swap time, still priced
+    // at the old model's rate — no live columns apply, so those are dashes.
+    const retiredRows = Object.entries(s.retired_backends || {})
+      .map(([key, b]) => {
+        const c = costOf(b);
+        return `<tr style="color:#8b949e;">
+        <td>${key}</td><td>${b.model}</td><td>retired</td>
+        <td>retired</td>
+        <td>${usd(c !== null ? c.in : null)}</td><td>${usd(c !== null ? c.out : null)}</td><td>–</td>
+        <td>–</td><td>${fmtMaybe(b.vllm_decoded_tokens)}</td>
+        <td>–</td><td>–</td>
+        <td>–</td>
+        <td>–</td>
+        <td>–</td>
+        <td>–</td>
+      </tr>`;
+      }).join("");
+    document.getElementById("rows").innerHTML = liveRows + retiredRows;
+    // aggregate cost across all backends (live + retired) -> "Total Cost" above legend
     let total = 0, opus = 0, any = false, anyOpus = false;
-    for (const b of Object.values(s.backends)) {
+    for (const b of [...Object.values(s.backends), ...Object.values(s.retired_backends || {})]) {
       const c = costOf(b); if (c) { any = true; total += c.total; }
       const o = opusCostOf(b); if (o) { anyOpus = true; opus += o.total; }
     }
