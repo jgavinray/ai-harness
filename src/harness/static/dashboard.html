@@ -33,8 +33,8 @@
 <table>
   <thead><tr>
     <th>backend</th><th>model</th><th>roles</th><th>state</th><th>input</th>
-    <th>decode</th><th>in-flight</th><th>decode tok/s</th><th>vLLM decoded</th><th>ttft p50</th><th>ttft p95</th>
-    <th>kv hit life</th><th>kv hit recent</th><th>kv writes</th><th>kv used</th>
+    <th>decode</th><th>in-flight</th><th>decode tok/s</th><th>decoded tok</th><th>ttft p50</th><th>ttft p95</th>
+    <th>kv hit life</th><th>kv hit recent</th><th>kv writes (all-time)</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -55,13 +55,12 @@
     <dt>critic skip</dt><dd>Requests where qwen80 critic was not called because deterministic runtime handling was enough or no critic trigger existed.</dd>
     <dt>tools in/pipe/out</dt><dd>Latest per-call tool schema counts: client sent to harness, after pipeline pruning, and backend-visible after runtime action shaping.</dd>
     <dt>harness output tok</dt><dd>Completed response output tokens reported by backend usage blocks and recorded by the harness.</dd>
-    <dt>vLLM decoded tok</dt><dd>Persisted cumulative decoded tokens from vLLM generation-token counter deltas, retained across harness and vLLM restarts.</dd>
-    <dt>decode tok/s</dt><dd>Live decoded-token rate from vLLM counter deltas between dashboard polls; blank until two metric samples exist.</dd>
+    <dt>decoded tok</dt><dd>Persisted cumulative decoded tokens from backend generation-token counter deltas (vLLM or SGLang), retained across harness and backend restarts.</dd>
+    <dt>decode tok/s</dt><dd>Live decoded-token rate: SGLang reads the scheduler's per-step gen_throughput from /v1/loads (updates as tokens decode), vLLM/llama.cpp use backend counter deltas between dashboard polls.</dd>
     <dt>TTFT</dt><dd>Time to first token, shown as rolling p50 and p95 latency.</dd>
     <dt>KV hit life</dt><dd>Lifetime percentage of prompt tokens served from backend KV cache.</dd>
     <dt>KV hit recent</dt><dd>Same cache-hit percentage over the most recent request window.</dd>
-    <dt>KV writes</dt><dd>Estimated tokens written to KV: fresh prompt tokens plus output tokens.</dd>
-    <dt>KV used</dt><dd>Current KV occupancy. A leading ~ means the harness is showing a resident-session estimate.</dd>
+    <dt>KV writes</dt><dd>Cumulative tokens ever written to KV: fresh (cache-miss) prompt tokens plus every decoded output token. This is the all-time write volume, not a snapshot — KV occupancy itself is intentionally not shown since it is point-in-time and dominated by whatever sessions happen to be resident.</dd>
   </dl>
 </section>
 <script>
@@ -120,7 +119,7 @@ async function tick() {
       ["requests", fmt(s.requests)],
       ["input tok", fmt(s.input_tokens)],
       ["harness output tok", fmt(s.output_tokens)],
-      ["vLLM decoded tok", fmtMaybe(s.vllm_decoded_tokens)],
+      ["decoded tok", fmtMaybe(s.vllm_decoded_tokens)],
       ["decode tok/s", fmtRate(s.live_output_tps)],
       ["kv cached tok", fmt(s.cached_tokens)],
       ["kv written tok", fmt(s.input_tokens - s.cached_tokens + s.output_tokens)],
@@ -158,7 +157,6 @@ async function tick() {
         <td>${b.kv_cache_hit_pct}%</td>
         <td>${b.kv_cache_hit_pct_recent}%</td>
         <td>${fmt(b.kv_written_tokens)}</td>
-        <td>${b.kv_used_pct == null ? "–" : (b.kv_used_est ? "~" : "") + b.kv_used_pct + "%"}</td>
       </tr>`;
       }).join("");
     // Retired: a backend's model swapped onto the same base_url. Tokens
@@ -173,7 +171,6 @@ async function tick() {
         <td>${usd(c !== null ? c.in : null)}</td><td>${usd(c !== null ? c.out : null)}</td><td>–</td>
         <td>–</td><td>${fmtMaybe(b.vllm_decoded_tokens)}</td>
         <td>–</td><td>–</td>
-        <td>–</td>
         <td>–</td>
         <td>–</td>
         <td>–</td>
