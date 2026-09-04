@@ -68,8 +68,13 @@ KV_USED_TTL_S = 60.0  # how long a missed poll may serve the last good reading
 
 # Prometheus gauge (0..1) for live KV pool occupancy, per backend kind.
 # llama.cpp only serves /metrics when launched with --metrics.
+# sglang:token_usage is SGLang's KV-cache-occupancy gauge name per its public
+# metrics docs; UNVERIFIED against a live instance (2026-08-20, no LAN access
+# from the dev sandbox) — confirm against the real /metrics scrape once
+# deployed and fix here if the name differs.
 KV_USAGE_GAUGES = {
     "vllm": "vllm:kv_cache_usage_perc",
+    "sglang": "sglang:token_usage",
     "llamacpp": "llamacpp:kv_cache_usage_ratio",
 }
 
@@ -77,6 +82,20 @@ VLLM_TOKEN_COUNTERS = {
     "output": "vllm:generation_tokens_total",
     "prompt": "vllm:prompt_tokens_total",
     "cached_prompt": "vllm:prompt_tokens_cached_total",
+}
+
+# SGLang has no documented cached-prompt-tokens counter equivalent to vLLM's
+# prompt_tokens_cached_total (it exposes cache_hit_rate as a ratio instead),
+# so that key is omitted here rather than guessed — a missing metric is
+# silently excluded by _live_token_metrics, same as a wrong name would be.
+SGLANG_TOKEN_COUNTERS = {
+    "output": "sglang:generation_tokens_total",
+    "prompt": "sglang:prompt_tokens_total",
+}
+
+TOKEN_COUNTERS_BY_KIND = {
+    "vllm": VLLM_TOKEN_COUNTERS,
+    "sglang": SGLANG_TOKEN_COUNTERS,
 }
 
 
@@ -373,11 +392,12 @@ def _request_log_paths(path: str | Path) -> list[Path]:
 
 
 def _live_token_metrics(b, text: str, now: float) -> dict:
-    if b.cfg.kind != "vllm":
+    metric_names = TOKEN_COUNTERS_BY_KIND.get(b.cfg.kind)
+    if not metric_names:
         return {"counters": {}, "rates": {}}
     counters = {
         name: value
-        for name, metric in VLLM_TOKEN_COUNTERS.items()
+        for name, metric in metric_names.items()
         if (value := _prometheus_sum(text, metric)) is not None
     }
     if not counters:
@@ -395,15 +415,39 @@ def _live_token_metrics(b, text: str, now: float) -> dict:
     return {"counters": counters, "rates": rates}
 
 
+async def _sglang_live_output_rate(client: httpx.AsyncClient, base: str, token_metrics: dict) -> None:
+    """SGLang's Prometheus token counters only advance when a request
+    *completes* (observe_one_finished_request in
+    python/sglang/srt/observability/metrics_collector.py), so a
+    counter-delta rate reads 0.0 through an in-flight generation and spikes
+    once at the end. /v1/loads exposes the scheduler's live per-step rate
+    instead (gen_throughput = num_generated_tokens / gap_latency per stat
+    cycle, managers/scheduler_components/metrics_reporter.py). Overwrites the
+    counter-delta output rate with the summed DP-rank value; silently no-ops
+    if the endpoint is absent or not 200, leaving the delta rate intact."""
+    try:
+        resp = await client.get(base + "/v1/loads", timeout=2.0)
+        if resp.status_code == 200:
+            loads = resp.json().get("loads", [])
+            if loads:
+                rates = token_metrics.setdefault("rates", {})
+                rates["output"] = round(
+                    sum(entry.get("gen_throughput") or 0.0 for entry in loads), 1
+                )
+    except httpx.HTTPError:
+        pass
+
+
 async def _live_backend_metrics(b, client: httpx.AsyncClient) -> dict:
     """Live backend metrics from Prometheus plus slot fallbacks.
 
     Completed request usage still comes from OpenAI usage blocks. These live
-    rates come directly from vLLM counters so long-running streams are visible
+    rates come from backend engine telemetry (vLLM Prometheus counters,
+    SGLang /v1/loads scheduler stats) so long-running streams are visible
     before their final usage block arrives.
     """
     gauge = KV_USAGE_GAUGES.get(b.cfg.kind)
-    if not gauge and b.cfg.kind != "vllm":
+    if not gauge and b.cfg.kind not in TOKEN_COUNTERS_BY_KIND:
         return {"kv_used": None, "token_metrics": {"counters": {}, "rates": {}}}
     base = b.cfg.base_url.rstrip("/").removesuffix("/v1")
     slots = max(1, b.cfg.max_in_flight or b.in_flight or 1)
@@ -415,6 +459,10 @@ async def _live_backend_metrics(b, client: httpx.AsyncClient) -> dict:
         if resp.status_code == 200:
             now = time.monotonic()
             token_metrics = _live_token_metrics(b, resp.text, now)
+            if b.cfg.kind == "sglang":
+                # run before the early gauge returns below so the live
+                # scheduler rate is attached on the normal path too
+                await _sglang_live_output_rate(client, base, token_metrics)
             if gauge and (value := _prometheus_first_value(resp.text, gauge)) is not None:
                 measured_pct = round(value * 100, 1)
                 if b.cfg.kind == "vllm" and estimated_pct > measured_pct:
@@ -422,6 +470,8 @@ async def _live_backend_metrics(b, client: httpx.AsyncClient) -> dict:
                 return {"kv_used": {"pct": measured_pct, "est": False}, "token_metrics": token_metrics}
     except httpx.HTTPError:
         pass
+    if b.cfg.kind == "sglang":
+        await _sglang_live_output_rate(client, base, token_metrics)
     if b.cfg.kind != "llamacpp":
         return {"kv_used": None, "token_metrics": token_metrics}
     try:

@@ -1,8 +1,8 @@
 """OpenAI Chat Completions streaming client — the universal downstream
 protocol (Ollama, vLLM, llama.cpp server, LM Studio, OpenRouter, ...).
 
-vLLM and llama.cpp subclasses add their schema-constraint parameters,
-used by the relay on repair retries.
+vLLM, SGLang, and llama.cpp subclasses add their schema-constraint
+parameters, used by the relay on repair retries.
 """
 
 from __future__ import annotations
@@ -74,6 +74,22 @@ class VllmBackend(OpenAIBackend):
         return payload
 
 
+class SglangBackend(OpenAIBackend):
+    constrained = True
+
+    def apply_constraint(self, payload: dict[str, Any], schema: dict) -> dict[str, Any]:
+        # SGLang has no vLLM-style guided_json extension; its OpenAI-compatible
+        # server honours the standard response_format json_schema field for
+        # constrained generation (xgrammar backend), so reuse that instead of
+        # a vendor key. UNVERIFIED against a live instance (2026-08-20, no LAN
+        # access from the dev sandbox) — if repair-retry success drops for a
+        # backend on this kind, check whether tool_choice=required actually
+        # forces a tool call here the way it does on vLLM.
+        payload = self.apply_response_format(payload, schema)
+        payload["tool_choice"] = "required"
+        return payload
+
+
 class LlamaCppBackend(OpenAIBackend):
     constrained = True
 
@@ -86,7 +102,12 @@ class LlamaCppBackend(OpenAIBackend):
         return payload
 
 
-KINDS = {"openai": OpenAIBackend, "vllm": VllmBackend, "llamacpp": LlamaCppBackend}
+KINDS = {
+    "openai": OpenAIBackend,
+    "vllm": VllmBackend,
+    "sglang": SglangBackend,
+    "llamacpp": LlamaCppBackend,
+}
 
 
 def make_backend(cfg: BackendCfg, client: httpx.AsyncClient) -> Backend:

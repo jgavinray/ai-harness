@@ -5,6 +5,7 @@ from harness.backends.base import BackendError
 from harness.backends.openai_compat import (
     LlamaCppBackend,
     OpenAIBackend,
+    SglangBackend,
     VllmBackend,
     make_backend,
 )
@@ -52,6 +53,13 @@ def test_constraints():
     assert v["guided_json"] == schema and v["tool_choice"] == "required"
     l = LlamaCppBackend.apply_constraint(None, dict(p), schema)
     assert l["json_schema"] == schema
+    assert SglangBackend.constrained
+    sg = SglangBackend.apply_constraint(SglangBackend(None, None), dict(p), schema)
+    assert sg["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "schema": schema, "strict": True},
+    }
+    assert sg["tool_choice"] == "required"
 
 
 def test_vllm_constraint_schema_strips_unsupported_grammar_keys():
@@ -73,6 +81,7 @@ def test_vllm_constraint_schema_strips_unsupported_grammar_keys():
 def test_factory():
     fake = FakeOpenAI()
     assert isinstance(make(fake, "vllm"), VllmBackend)
+    assert isinstance(make(fake, "sglang"), SglangBackend)
     assert isinstance(make(fake, "llamacpp"), LlamaCppBackend)
     assert isinstance(make(fake, "openai"), OpenAIBackend)
     with pytest.raises(ValueError):

@@ -24,9 +24,11 @@ class FakeOpenAI:
         self.requests: list[dict] = []
         self.metrics_text: str | None = None  # set to expose a /metrics endpoint
         self.slots: list[dict] | None = None  # set to expose a /slots endpoint
+        self.loads: dict | None = None  # set to expose a /v1/loads endpoint (SGLang)
         self.app.post("/v1/chat/completions")(self.handler)
         self.app.get("/metrics")(self.metrics)
         self.app.get("/slots")(self.get_slots)
+        self.app.get("/v1/loads")(self.get_loads)
 
     async def metrics(self):
         if self.metrics_text is None:
@@ -38,6 +40,12 @@ class FakeOpenAI:
         if self.slots is None:
             return JSONResponse({"error": "slots disabled"}, status_code=501)
         return JSONResponse(self.slots)
+
+    async def get_loads(self):
+        if self.loads is None:
+            # mirrors a backend without the /v1/loads endpoint
+            return JSONResponse({"error": "loads disabled"}, status_code=501)
+        return JSONResponse(self.loads)
 
     def push(self, script: list[dict]) -> None:
         self.scripts.append(script)

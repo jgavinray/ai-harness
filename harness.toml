@@ -15,7 +15,13 @@ port = 8484
 
 [[backends]]
 name = "qwen27"
-kind = "vllm"
+kind = "sglang"         # engine on this host switched vLLM -> SGLang, 2026-08-20;
+                        # same base_url/port, in-place swap per user direction.
+                        # SGLang metrics wiring (KV_USAGE_GAUGES / SGLANG_TOKEN_COUNTERS
+                        # in server.py) is UNVERIFIED against a live instance — no LAN
+                        # access from the dev sandbox that made this change. Confirm the
+                        # /stats "kv used" and "decoded tok" numbers for this backend
+                        # once deployed.
 base_url = "http://192.168.0.43:8000/v1"
 model = "qwen3.8-27b"   # swapped 2026-08-14, was qwen3.6-27b (root: /models/Qwen3.8-27B-NVFP4,
                         # confirmed live via GET /v1/models on 192.168.0.43:8000). Same base_url,
@@ -33,12 +39,10 @@ kind = "vllm"
 base_url = "http://192.168.0.33:8888/v1"
 model = "deepseek-v4-flash-dspark"   # root: deepseek-ai/DeepSeek-V4-Flash-0731 as of 2026-07-31.
                                      # The served alias is stable across rebuilds; the weights are not.
-profile = "deepseek_r1"              # owns thinking_request. deepseek_v4_flash has an empty one, so it
-                                     # can never switch the channel on no matter what else is declared.
-context_window = 262144              # vLLM reports max_model_len = 262144 (re-read 2026-07-31). The
-                                     # previous 1048576 was 4x over: harmless only while this backend
-                                     # was inert, but with reasoning routed here history.py:99 would
-                                     # size compaction to a window the backend rejects.
+profile = "deepseek_r1"              # owns thinking_request; deepseek_v4_flash's is empty, so it can't
+context_window = 1048576             # vLLM reports 1048576 (re-read 2026-08-15, confirmed twice live;
+                                     # 262144 set 2026-07-31 is stale). history.py:99 sizes compaction
+                                     # off this, so under-declaring just wastes budget, doesn't reject.
 # LIVE as of 2026-07-31 (was inert): reasoning turns route here. review/critic
 # stay off below — the 2026-07-29 decision that no LLM sidecar second-guesses
 # the deterministic guards is unchanged, so those roles are not declared.
@@ -75,27 +79,28 @@ max_in_flight = 6
 # completion tokens (~14k chars reasoning to 2.8k answer) and stopped on its own.
 capabilities = ["reasoning"]
 
-[[backends]]
-name = "nemotron30"
-kind = "vllm"
-base_url = "http://192.168.0.43:8001/v1"   # same host as qwen27, second vLLM instance
-model = "nemotron-3.5-lightning-30b"       # root: /models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
-profile = "qwen"                           # probed 2026-08-11: plain OpenAI shapes, no <think> spans
-context_window = 262144                    # vLLM reports max_model_len = 262144
+#[[backends]]
+#name = "nemotron30"
+#kind = "vllm"
+#base_url = "http://192.168.0.43:8001/v1"   # same host as qwen27, second vLLM instance
+#model = "nemotron-3.5-lightning-30b"       # root: /models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+#profile = "qwen"                           # probed 2026-08-11: plain OpenAI shapes, no <think> spans
+#context_window = 1048576                   # vLLM reports max_model_len = 1048576 (re-read 2026-08-15,
+#                                            # confirmed twice live; the 262144 probed 2026-08-11 is stale)
 # roles = ["candidate"] deliberately: candidate is excluded from every routing
 # path (pool.py with_role / with_capabilities), so this backend takes ZERO live
 # traffic. It is declared only so it appears in /stats and therefore on the
 # dashboard (token counters, KV, TTFT, cost). Give it a real role only behind
 # an envelope eval delta, per law 1.
-roles = ["candidate"]
+#roles = ["candidate"]
 # Probed 2026-08-11 against the live endpoint: this deployment DOES run a
 # reasoning parser — the `reasoning` field comes back populated by default with
 # no chat_template_kwargs sent, which base.py already parses into ThinkingDelta.
 # The "reasoning" capability is NOT declared: capabilities gate routing of
 # reasoning turns, and routing here is exactly what the candidate role withholds
 # until the eval gate has measured it.
-capabilities = []
-max_in_flight = 2
+#capabilities = []
+#max_in_flight = 2
 
 #[[backends]]
 #name = "qwen35"

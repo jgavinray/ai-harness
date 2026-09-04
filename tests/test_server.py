@@ -831,6 +831,142 @@ async def test_stats_polls_live_kv_usage_from_backend_metrics():
     assert d["kv_used_pct"] == 42.0
 
 
+async def test_stats_polls_live_kv_usage_from_sglang_backend_metrics():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = 'sglang:token_usage{name="m"} 0.42\n'
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="s", kind="sglang", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        d = (await client.get("/stats")).json()["backends"]["s"]
+    assert d["kv_used_pct"] == 42.0
+
+
+async def test_stats_tracks_sglang_decoded_tokens_and_live_rate():
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = (
+        'sglang:token_usage{name="m"} 0.42\n'
+        'sglang:generation_tokens_total{name="m"} 1000\n'
+        'sglang:prompt_tokens_total{name="m"} 5000\n'
+    )
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="s", kind="sglang", base_url="http://fake/v1",
+                       model="m", roles=["main", "subagent", "fast"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        first = (await client.get("/stats")).json()
+        fake.metrics_text = (
+            'sglang:token_usage{name="m"} 0.42\n'
+            'sglang:generation_tokens_total{name="m"} 1250\n'
+            'sglang:prompt_tokens_total{name="m"} 5100\n'
+        )
+        second = (await client.get("/stats")).json()
+
+    assert first["vllm_decoded_tokens"] == 1000
+    assert first["backends"]["s"]["vllm_decoded_tokens"] == 1000
+    assert second["vllm_decoded_tokens"] == 1250
+    assert second["vllm_prompt_tokens"] == 5100
+    assert second["live_output_tps"] is not None
+    assert second["live_output_tps"] > 0
+
+
+async def test_stats_sglang_live_rate_comes_from_v1_loads_not_completing_counters():
+    """SGLang's Prometheus counters only advance when a request completes,
+    so the counter-delta rate is 0.0 during an in-flight generation. The
+    live decode rate must come from /v1/loads gen_throughput instead.
+
+    Counters are held constant between the two polls (as they would be
+    mid-generation); the only signal for a non-zero rate is /v1/loads.
+    """
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()
+    fake.metrics_text = (
+        'sglang:token_usage{name="m"} 0.08\n'
+        'sglang:generation_tokens_total{name="m"} 1000\n'
+        'sglang:prompt_tokens_total{name="m"} 5000\n'
+    )
+    fake.loads = {"loads": [
+        {"gen_throughput": 41.5, "num_running_reqs": 1, "num_waiting_reqs": 0},
+        {"gen_throughput": 20.25, "num_running_reqs": 1, "num_waiting_reqs": 0},
+    ]}
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="s", kind="sglang", base_url="http://fake/v1",
+                       model="m", roles=["main"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        first = (await client.get("/stats")).json()
+        # same counter values on the next poll: no completion happened
+        second = (await client.get("/stats")).json()
+
+    # cumulative counters still persist from Prometheus
+    assert second["vllm_decoded_tokens"] == 1000
+    # live rate is the summed /v1/loads gen_throughput across DP ranks,
+    # not the (zero) counter delta
+    assert second["live_output_tps"] == 61.8
+    assert second["backends"]["s"]["live_output_tps"] == 61.8
+    # first poll also has the live rate (no prior sample needed)
+    assert first["live_output_tps"] == 61.8
+
+
+async def test_stats_sglang_falls_back_to_counter_delta_when_loads_endpoint_absent():
+    """If /v1/loads is unavailable (old SGLang build / 404), the
+    counter-delta rate must still work for sglang backends."""
+    from harness.config import PoolBackendCfg
+
+    fake = FakeOpenAI()  # fake.loads stays None → /v1/loads 501s
+    fake.metrics_text = (
+        'sglang:token_usage{name="m"} 0.08\n'
+        'sglang:generation_tokens_total{name="m"} 1000\n'
+        'sglang:prompt_tokens_total{name="m"} 5000\n'
+    )
+    settings = Settings()
+    settings.backends = [
+        PoolBackendCfg(name="s", kind="sglang", base_url="http://fake/v1",
+                       model="m", roles=["main"]),
+    ]
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fake.app), base_url="http://fake"
+    )
+    app = create_app(settings, backend_client=backend_client)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy")
+    async with client:
+        _ = (await client.get("/stats")).json()
+        fake.metrics_text = (
+            'sglang:token_usage{name="m"} 0.08\n'
+            'sglang:generation_tokens_total{name="m"} 1250\n'
+            'sglang:prompt_tokens_total{name="m"} 5100\n'
+        )
+        second = (await client.get("/stats")).json()
+
+    assert second["vllm_decoded_tokens"] == 1250
+    assert second["live_output_tps"] is not None
+    assert second["live_output_tps"] > 0
+
+
 async def test_stats_tracks_vllm_decoded_tokens_and_live_rate():
     from harness.config import PoolBackendCfg
 

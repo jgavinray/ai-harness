@@ -11,7 +11,7 @@ class ServerCfg(BaseModel):
 
 
 class BackendCfg(BaseModel):
-    kind: str = "openai"  # openai | vllm | llamacpp
+    kind: str = "openai"  # openai | vllm | sglang | llamacpp
     base_url: str = "http://localhost:11434/v1"
     model: str = "qwen2.5-coder:14b"
     api_key: str = "local"
